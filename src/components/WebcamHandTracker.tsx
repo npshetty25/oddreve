@@ -34,7 +34,8 @@ export function WebcamHandTracker({
   const [holdProgress, setHoldProgress] = useState<number>(0);
   const [confirmedValue, setConfirmedValue] = useState<ThrowValue | null>(null);
 
-  const stabilizerRef = useRef(new ThrowStabilizer(250));
+  // 2-second hold time required to lock throw as requested by user
+  const stabilizerRef = useRef(new ThrowStabilizer(2000));
   const animationFrameId = useRef<number | null>(null);
   const lastProcessedTime = useRef<number>(0);
 
@@ -219,8 +220,13 @@ export function WebcamHandTracker({
                 const classified = classifyHandGesture(rawLandmarks, confidence);
                 setDetection(classified);
 
-                // Stabilization
-                if (isThrowRequired && classified.fingerCount !== null) {
+                // Stabilization: 1-6 are valid moves (0 is not counted as a move)
+                if (
+                  isThrowRequired &&
+                  classified.fingerCount !== null &&
+                  classified.fingerCount >= 1 &&
+                  classified.fingerCount <= 6
+                ) {
                   const stable = stabilizerRef.current.update(classified.fingerCount, Date.now());
                   setHoldProgress(stable.progress);
 
@@ -314,7 +320,7 @@ export function WebcamHandTracker({
           <p className="text-xs font-mono text-black max-w-xs mb-4">{errorMessage}</p>
           <button
             onClick={startCamera}
-            className="gc-btn gc-btn--sm gc-btn--lime flex items-center gap-2"
+            className="nb-btn nb-btn--lime nb-btn--sm flex items-center gap-2"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             <span>Retry Camera</span>
@@ -338,15 +344,13 @@ export function WebcamHandTracker({
         </div>
       )}
 
-      {/* Locked Throw Banner */}
+      {/* Locked Throw Badge - Unobtrusive, face remains 100% visible */}
       {confirmedValue !== null && (
-        <div className="absolute inset-0 bg-[#a3f23d]/90 backdrop-blur-[2px] flex flex-col items-center justify-center z-20 animate-in fade-in">
-          <div className="font-mono text-xs uppercase font-bold text-black border-2 border-black bg-white px-2 py-0.5 mb-1 shadow-[2px_2px_0_0_#000]">
-            Throw Locked
-          </div>
-          <div className="font-display text-6xl text-black font-black">
-            {confirmedValue}
-          </div>
+        <div className="absolute top-3 right-3 z-20 flex items-center gap-2 bg-[#a3f23d] border-3 border-black px-3 py-1.5 shadow-[3px_3px_0_0_#000] animate-bounce-in">
+          <span className="w-2.5 h-2.5 rounded-full bg-black animate-ping" />
+          <span className="font-mono text-xs uppercase font-black text-black">
+            LOCKED: {confirmedValue}
+          </span>
         </div>
       )}
 
