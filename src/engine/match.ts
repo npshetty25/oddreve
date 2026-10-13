@@ -259,17 +259,19 @@ export function playBall(
   const ruleConfig: BallRuleConfig =
     state.mode === 'baseball' ? baseballBallRule : cricketBallRule;
 
-  // For baseball, count current strikes on active batter
+  // For baseball, count consecutive strikes on active batter
   let currentStrikes = 0;
   if (state.mode === 'baseball') {
-    // Count consecutive strikes for current active batter since last wicket or reset
-    // Strikes count towards batter's wicket.
+    // Count consecutive strikes for current active batter
     for (let i = innings.events.length - 1; i >= 0; i--) {
       const prev = innings.events[i];
       if (prev.batterId !== innings.activeBatterId) break;
       if (prev.isOut) break;
       if (prev.isStrike) {
         currentStrikes++;
+      } else {
+        // Break on non-strike ball because strikes must be CONSECUTIVE
+        break;
       }
     }
   }

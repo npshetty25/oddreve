@@ -6,7 +6,6 @@ import { useTheme } from '@/store/useTheme';
 import { usePlayerProfile } from '@/store/usePlayerProfile';
 import { Scoreboard } from '@/components/Scoreboard';
 import { CommentaryCard } from '@/components/CommentaryCard';
-import { MultiplayerLobby } from '@/components/MultiplayerLobby';
 import { ServerRoom } from '@/app/api/rooms/route';
 import { WebcamHandTracker } from '@/components/WebcamHandTracker';
 import { KeyboardFallback } from '@/components/KeyboardFallback';
@@ -14,17 +13,19 @@ import { GameMode, GameFormat, ThrowValue, TossCall, TossChoice } from '@/engine
 import {
   HelpCircle,
   X,
-  RotateCcw,
   Users,
   Bot,
   ChevronRight,
   Keyboard,
+  Copy,
+  Check,
+  UserPlus,
 } from 'lucide-react';
 
 /* =========================================== */
-/* Screen Flow: 'landing' -> 'setup' -> 'playing' | 'multiplayer_lobby' */
+/* Screen Flow: 'landing' -> 'setup' -> 'playing' */
 /* =========================================== */
-type AppScreen = 'landing' | 'setup' | 'playing' | 'multiplayer_lobby';
+type AppScreen = 'landing' | 'setup' | 'playing';
 type OpponentChoice = 'friend' | 'computer';
 
 export default function Home() {
@@ -44,7 +45,12 @@ export default function Home() {
   } = useGameStore();
 
   const { theme, toggleTheme } = useTheme();
-  const { profile, createProfile, recordGame } = usePlayerProfile();
+  const { profile, initProfile, createProfile, recordGame } = usePlayerProfile();
+
+  // Initialize profile from local storage on mount
+  useEffect(() => {
+    initProfile();
+  }, [initProfile]);
 
   const [screen, setScreen] = useState<AppScreen>('landing');
   const [opponentChoice, setOpponentChoice] = useState<OpponentChoice | null>(null);
@@ -57,18 +63,21 @@ export default function Home() {
   // Online Multiplayer State
   const [activeRoom, setActiveRoom] = useState<ServerRoom | null>(null);
   const [myMultiplayerId, setMyMultiplayerId] = useState<string>('');
-  const [urlRoomCode, setUrlRoomCode] = useState<string | null>(null);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [isJoiningRoom, setIsJoiningRoom] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
-  // Detect URL ?room=code on mount
+  // Auto-detect URL ?room=code on mount and jump straight into match
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      const room = params.get('room');
-      if (room) {
-        setUrlRoomCode(room.toLowerCase());
-        setScreen('multiplayer_lobby');
+      const roomCode = params.get('room');
+      if (roomCode) {
+        handleJoinFriendMatch(roomCode.trim().toLowerCase());
       }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Sync online room state every 500ms when playing in a multiplayer room
@@ -101,10 +110,10 @@ export default function Home() {
   // Sync profile if available
   useEffect(() => {
     if (profile) {
-      setPlayerName(profile.name);
-      setPlayerUsername(profile.username || '');
+      setPlayerName((prev) => (prev !== profile.name ? profile.name : prev));
+      setPlayerUsername((prev) => (prev !== (profile.username || '') ? profile.username || '' : prev));
     }
-  }, [profile]);
+  }, [profile?.name, profile?.username]);
 
   // Record game outcome when match ends
   useEffect(() => {
@@ -112,12 +121,15 @@ export default function Home() {
       const isUserWin = match.result.winnerTeamId === match.teamA.id;
       recordGame(isUserWin);
     }
-  }, [match.phase, match.result, match.teamA.id, recordGame]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match.phase, match.result, match.teamA.id]);
 
   const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
   const isTeamABatting = currentInnings?.battingTeamId === match.teamA.id;
+  const isBaseball = match.mode === 'baseball';
+  const is2v2 = match.format === '2v2';
 
-  // Determine local player and opponent identity (supports both offline AI and online multiplayer)
+  // Determine local player and opponent identity
   const isHost = activeRoom
     ? activeRoom.players.find((p) => p.id === myMultiplayerId)?.teamId === 'team_a'
     : true;
@@ -149,6 +161,15 @@ export default function Home() {
     ? (!isTeamABatting ? lastBallEvent.batterThrow : lastBallEvent.bowlerThrow)
     : null;
   const oppDisplayedThrow = isHost ? oppLastThrow : userLastThrow;
+
+  // Copy shareable link
+  const handleCopyInviteLink = () => {
+    if (!activeRoom) return;
+    const shareUrl = `${window.location.origin}?room=${activeRoom.code}`;
+    navigator.clipboard?.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   // Handlers for Local or Multiplayer Actions
   const handlePlayerThrow = async (val: ThrowValue) => {
@@ -233,24 +254,103 @@ export default function Home() {
     }
   };
 
-  // Handle Game Start
-  function handleStartGame(mode: GameMode, format: GameFormat) {
-    const opp = opponentChoice === 'computer' ? 'computer' : 'human';
+  // Start Offline / Computer Game
+  function handleStartComputerGame(mode: GameMode, format: GameFormat) {
     const name = playerName.trim() || profile?.name || 'You';
-
     if (!profile) {
       createProfile(name, playerUsername);
     }
-
-    setOpponentType(opp as 'human' | 'computer');
+    setOpponentType('computer');
     initMatch({
       mode,
       format,
       teamAName: name,
-      teamBName: opp === 'computer' ? 'Computer' : 'Friend',
-      opponentType: opp as 'human' | 'computer',
+      teamBName: 'Computer',
+      opponentType: 'computer',
     });
     setScreen('playing');
+  }
+
+  // Create Room & jump straight into match screen
+  async function handleCreateFriendRoom(mode: GameMode, format: GameFormat) {
+    const name = playerName.trim() || profile?.name || 'You';
+    if (!profile) {
+      createProfile(name, playerUsername);
+    }
+    setJoinError(null);
+    try {
+      const res = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ playerName: name, mode, format }),
+      });
+      const data = await res.json();
+      if (data.success && data.room) {
+        setActiveRoom(data.room);
+        setMyMultiplayerId(data.playerId);
+        setOpponentType('human');
+        initMatch({
+          mode,
+          format,
+          teamAName: name,
+          teamBName: 'Waiting for friend...',
+          opponentType: 'human',
+        });
+        setScreen('playing');
+      } else {
+        setJoinError(data.error || 'Failed to create room');
+      }
+    } catch (err: any) {
+      setJoinError(err.message || 'Network error');
+    }
+  }
+
+  // Join Existing Room
+  async function handleJoinFriendMatch(code: string) {
+    const trimmed = code.trim().toLowerCase();
+    if (!trimmed) {
+      setJoinError('Please enter a room code');
+      return;
+    }
+    setIsJoiningRoom(true);
+    setJoinError(null);
+    const name = playerName.trim() || profile?.name || 'Friend';
+    try {
+      const playerId = `player_${Date.now().toString(36)}`;
+      const res = await fetch(`/api/rooms/${trimmed}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'join', playerId, playerName: name }),
+      });
+      const data = await res.json();
+      if (data.success && data.room) {
+        setActiveRoom(data.room);
+        setMyMultiplayerId(data.playerId || playerId);
+        setOpponentType('human');
+        initMatch({
+          mode: data.room.mode,
+          format: data.room.format,
+          teamAName: data.room.players[0]?.name || 'Player 1',
+          teamBName: name,
+          opponentType: 'human',
+        });
+        if (data.room.match) {
+          useGameStore.setState({
+            match: data.room.match,
+            lastBallEvent: data.room.lastEvent,
+            ballCycle: data.room.ballCycle,
+            pendingThrows: data.room.pendingThrows,
+          });
+        }
+        setScreen('playing');
+      } else {
+        setJoinError(data.error || 'Room not found or full');
+      }
+    } catch (err: any) {
+      setJoinError(err.message || 'Failed to join room');
+    } finally {
+      setIsJoiningRoom(false);
+    }
   }
 
   function handleBackToLanding() {
@@ -259,6 +359,7 @@ export default function Home() {
     setMyMultiplayerId('');
     setScreen('landing');
     setOpponentChoice(null);
+    setJoinError(null);
   }
 
   // ===================== LANDING PAGE =====================
@@ -314,26 +415,6 @@ export default function Home() {
               <ellipse className="cloud" cx="145" cy="42" rx="45" ry="20" />
             </svg>
 
-            {/* Floodlights */}
-            <div className="absolute top-4 left-4 sm:left-10 select-none">
-              <div className="w-2.5 h-20 sm:h-28 bg-[#555] mx-auto" />
-              <div className="w-10 h-6 bg-[#222] border-2 border-black mx-auto -mt-1 flex items-center justify-center">
-                <div className="grid grid-cols-2 gap-1">
-                  <div className="w-2 h-2 bg-[#ffd60a] shadow-[0_0_8px_#ffd60a]" />
-                  <div className="w-2 h-2 bg-[#ffd60a] shadow-[0_0_8px_#ffd60a]" />
-                </div>
-              </div>
-            </div>
-            <div className="absolute top-4 right-4 sm:right-10 select-none">
-              <div className="w-2.5 h-20 sm:h-28 bg-[#555] mx-auto" />
-              <div className="w-10 h-6 bg-[#222] border-2 border-black mx-auto -mt-1 flex items-center justify-center">
-                <div className="grid grid-cols-2 gap-1">
-                  <div className="w-2 h-2 bg-[#ffd60a] shadow-[0_0_8px_#ffd60a]" />
-                  <div className="w-2 h-2 bg-[#ffd60a] shadow-[0_0_8px_#ffd60a]" />
-                </div>
-              </div>
-            </div>
-
             {/* Big Pop-Art Title */}
             <div className="relative z-10 text-center animate-slide-up">
               <div className="inline-block mb-3">
@@ -352,7 +433,7 @@ export default function Home() {
 
               <div className="block mt-2">
                 <p className="nb-card inline-block bg-[var(--bg-secondary)] px-5 py-2 font-body text-xs sm:text-sm text-[var(--text-primary)] max-w-md mx-auto shadow-[4px_4px_0_0_#000]">
-                  Challenge a friend or the AI. Throw fingers at the webcam. Site does the umpiring!
+                  Play hand cricket & baseball using your webcam. Real-time umpire with zero arguments!
                 </p>
               </div>
             </div>
@@ -365,7 +446,7 @@ export default function Home() {
                   if (!profile) {
                     setShowNameModal(true);
                   } else {
-                    setScreen('multiplayer_lobby');
+                    setScreen('setup');
                   }
                 }}
                 className="nb-btn nb-btn--yellow w-full text-base sm:text-lg flex items-center justify-between border-4"
@@ -396,7 +477,7 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Profile record pill with edit button */}
+            {/* Profile record pill */}
             {profile && (
               <div className="relative z-10 mt-4 animate-slide-up" style={{ animationDelay: '0.3s' }}>
                 <button
@@ -426,135 +507,45 @@ export default function Home() {
               <span>•</span>
               <span>NO SIGN UP</span>
               <span>•</span>
-              <span>ONE BALL AT A TIME</span>
-              <span>•</span>
               <span>ODD OR EVEN</span>
+              <span>•</span>
+              <span>HAND CRICKET & BASEBALL</span>
               <span>•</span>
               <span>YOUR CAMERA IS THE UMPIRE</span>
-              <span>•</span>
-              <span>1 TO 6 RUNS</span>
-              <span>•</span>
-              <span>NO SIGN UP</span>
-              <span>•</span>
-              <span>ODD OR EVEN</span>
               <span>•</span>
             </div>
           </div>
         </main>
 
-        {/* Footer */}
-        <footer className="w-full px-4 py-2 bg-[var(--bg-secondary)] border-t-3 border-black text-center">
-          <span className="font-num text-[11px] text-[var(--text-muted)]">
-            ODDOREVE — Next-Gen Webcam Hand Cricket & Baseball
-          </span>
-        </footer>
-
-        {/* "CREATE YOUR NAME" Modal */}
+        {/* Modals */}
+        {showHowToPlay && <HowToPlayModal onClose={() => setShowHowToPlay(false)} />}
         {showNameModal && (
-          <div className="fixed inset-0 bg-[var(--overlay-bg)] z-50 flex items-center justify-center p-4">
-            <div className="w-full max-w-sm border-4 border-black bg-white shadow-[8px_8px_0_0_#000] animate-bounce-in overflow-hidden">
-              {/* Yellow header bar with o o o */}
-              <div className="bg-[#ffd60a] border-b-4 border-black px-4 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-full border-2 border-black bg-white inline-block" />
-                  <span className="w-3 h-3 rounded-full border-2 border-black bg-white inline-block" />
-                  <span className="w-3 h-3 rounded-full border-2 border-black bg-white inline-block" />
-                </div>
-                <span className="font-num text-[11px] font-black uppercase tracking-wider text-black">
-                  CREATE YOUR NAME
-                </span>
-                <button onClick={() => setShowNameModal(false)} className="text-black font-black">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Modal Body */}
-              <div className="p-6 bg-white space-y-4">
-                <h2 className="font-display text-3xl font-black text-black leading-none uppercase">
-                  CREATE<br />YOUR NAME
-                </h2>
-
-                <div className="bg-[#a3f23d] border-4 border-black p-4 space-y-3 shadow-[4px_4px_0_0_#000]">
-                  <div>
-                    <label className="block font-num text-[11px] font-black uppercase text-black mb-1">
-                      YOUR NAME
-                    </label>
-                    <input
-                      type="text"
-                      value={playerName}
-                      onChange={(e) => setPlayerName(e.target.value)}
-                      placeholder="Virat Kohli"
-                      className="w-full border-3 border-black px-3 py-2 font-mono text-sm bg-white text-black focus:outline-none"
-                      autoFocus
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-num text-[11px] font-black uppercase text-black mb-1">
-                      YOUR USERNAME
-                    </label>
-                    <input
-                      type="text"
-                      value={playerUsername}
-                      onChange={(e) => setPlayerUsername(e.target.value)}
-                      placeholder="ViratKohliLover"
-                      className="w-full border-3 border-black px-3 py-2 font-mono text-sm bg-white text-black focus:outline-none"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          const name = playerName.trim() || 'Player';
-                          createProfile(name, playerUsername);
-                          setShowNameModal(false);
-                          setScreen(opponentChoice === 'friend' ? 'multiplayer_lobby' : 'setup');
-                        }
-                      }}
-                    />
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      const name = playerName.trim() || 'Player';
-                      createProfile(name, playerUsername);
-                      setShowNameModal(false);
-                      setScreen(opponentChoice === 'friend' ? 'multiplayer_lobby' : 'setup');
-                    }}
-                    className="w-full py-3 bg-[#e0d6c3] hover:bg-[#d0c6b3] border-3 border-black font-display text-sm font-black text-black uppercase tracking-wider shadow-[3px_3px_0_0_#000] cursor-pointer"
-                  >
-                    CONTINUE
-                  </button>
-                </div>
-              </div>
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+            <div className="nb-card bg-white p-5 max-w-sm w-full border-4 border-black shadow-[6px_6px_0_0_#000] animate-bounce-in">
+              <h3 className="font-display text-lg mb-2 text-black">YOUR PLAYER NAME</h3>
+              <input
+                type="text"
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value)}
+                placeholder="Enter name"
+                className="w-full border-3 border-black p-2 font-display text-base mb-3 bg-white text-black"
+                maxLength={14}
+                autoFocus
+              />
+              <button
+                onClick={() => {
+                  createProfile(playerName.trim() || 'Player', playerUsername);
+                  setShowNameModal(false);
+                  if (opponentChoice) setScreen('setup');
+                }}
+                className="nb-btn nb-btn--lime w-full text-sm border-3"
+              >
+                SAVE & CONTINUE →
+              </button>
             </div>
           </div>
         )}
-
-        {/* How to Play Modal */}
-        {showHowToPlay && <HowToPlayModal onClose={() => setShowHowToPlay(false)} />}
       </div>
-    );
-  }
-
-  // ===================== MULTIPLAYER LOBBY (WORDLE-STYLE) =====================
-  if (screen === 'multiplayer_lobby') {
-    return (
-      <MultiplayerLobby
-        initialRoomCode={urlRoomCode}
-        playerName={profile?.name || playerName || 'Player'}
-        onStartMatch={(room, playerId) => {
-          setActiveRoom(room);
-          setMyMultiplayerId(playerId);
-          setOpponentType('human');
-          if (room.match) {
-            useGameStore.setState({
-              match: room.match,
-              lastBallEvent: room.lastEvent,
-              ballCycle: room.ballCycle,
-              pendingThrows: room.pendingThrows,
-            });
-          }
-          setScreen('playing');
-        }}
-        onBack={handleBackToLanding}
-      />
     );
   }
 
@@ -562,7 +553,6 @@ export default function Home() {
   if (screen === 'setup') {
     return (
       <div className="min-h-screen flex flex-col bg-[var(--bg-primary)]">
-        {/* Top Header */}
         <header className="w-full flex items-center justify-between px-4 sm:px-6 py-2.5 border-b-4 border-black bg-[var(--bg-secondary)] select-none">
           <button onClick={handleBackToLanding} className="nb-btn nb-btn--ghost nb-btn--sm">
             ← BACK
@@ -581,7 +571,7 @@ export default function Home() {
               <div className="nb-win-bar">
                 <div className="nb-dots"><i /><i /><i /></div>
                 <span className="font-num text-xs uppercase font-bold tracking-wider text-[var(--text-secondary)]">
-                  {opponentChoice === 'computer' ? '🤖 vs Computer' : '👥 vs Friend'} — Select Format
+                  {opponentChoice === 'computer' ? '🤖 vs Computer' : '👥 vs Friend'} — Select Mode
                 </span>
               </div>
 
@@ -590,9 +580,21 @@ export default function Home() {
                   CHOOSE YOUR MODE
                 </h2>
 
+                {joinError && (
+                  <div className="p-2 bg-[#ff3b30] text-white border-2 border-black font-num text-xs font-bold shadow-[2px_2px_0_0_#000]">
+                    ⚠️ {joinError}
+                  </div>
+                )}
+
                 {/* Cricket 1v1 */}
                 <button
-                  onClick={() => handleStartGame('cricket', '1v1')}
+                  onClick={() => {
+                    if (opponentChoice === 'friend') {
+                      handleCreateFriendRoom('cricket', '1v1');
+                    } else {
+                      handleStartComputerGame('cricket', '1v1');
+                    }
+                  }}
                   className="nb-btn nb-btn--yellow w-full text-left flex items-center justify-between border-3"
                 >
                   <div className="flex items-center gap-3">
@@ -607,14 +609,20 @@ export default function Home() {
 
                 {/* Cricket 2v2 */}
                 <button
-                  onClick={() => handleStartGame('cricket', '2v2')}
+                  onClick={() => {
+                    if (opponentChoice === 'friend') {
+                      handleCreateFriendRoom('cricket', '2v2');
+                    } else {
+                      handleStartComputerGame('cricket', '2v2');
+                    }
+                  }}
                   className="nb-btn nb-btn--pink w-full text-left flex items-center justify-between border-3"
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-2xl">🏏</span>
                     <div>
                       <div className="text-base font-display">CRICKET 2v2</div>
-                      <div className="text-[10px] font-num font-normal opacity-80">Both batters must be out. Bowlers rotate overs.</div>
+                      <div className="text-[10px] font-num font-normal opacity-80">Both batters out. 4 active player boxes!</div>
                     </div>
                   </div>
                   <ChevronRight className="w-5 h-5" />
@@ -622,14 +630,20 @@ export default function Home() {
 
                 {/* Baseball 1v1 */}
                 <button
-                  onClick={() => handleStartGame('baseball', '1v1')}
+                  onClick={() => {
+                    if (opponentChoice === 'friend') {
+                      handleCreateFriendRoom('baseball', '1v1');
+                    } else {
+                      handleStartComputerGame('baseball', '1v1');
+                    }
+                  }}
                   className="nb-btn nb-btn--blue w-full text-left flex items-center justify-between border-3"
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-2xl">⚾</span>
                     <div>
                       <div className="text-base font-display">BASEBALL 1v1</div>
-                      <div className="text-[10px] font-num font-normal opacity-80">Diff of 1 = strike. 3 strikes = OUT. Equal = double.</div>
+                      <div className="text-[10px] font-num font-normal opacity-80">Diff of 1 = Strike! 3 Strikes = Out! Equal = Double!</div>
                     </div>
                   </div>
                   <ChevronRight className="w-5 h-5" />
@@ -637,18 +651,51 @@ export default function Home() {
 
                 {/* Baseball 2v2 */}
                 <button
-                  onClick={() => handleStartGame('baseball', '2v2')}
+                  onClick={() => {
+                    if (opponentChoice === 'friend') {
+                      handleCreateFriendRoom('baseball', '2v2');
+                    } else {
+                      handleStartComputerGame('baseball', '2v2');
+                    }
+                  }}
                   className="nb-btn nb-btn--ghost w-full text-left flex items-center justify-between border-3"
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-2xl">⚾</span>
                     <div>
                       <div className="text-base font-display">BASEBALL 2v2</div>
-                      <div className="text-[10px] font-num font-normal opacity-80">Both batters out. Bowlers rotate by over.</div>
+                      <div className="text-[10px] font-num font-normal opacity-80">2v2 Baseball diamond match. 4 player boxes!</div>
                     </div>
                   </div>
                   <ChevronRight className="w-5 h-5" />
                 </button>
+
+                {/* Join Existing Friend Room Section */}
+                {opponentChoice === 'friend' && (
+                  <div className="pt-3 border-t-2 border-black/20 space-y-2">
+                    <div className="font-num text-xs font-black uppercase text-black">
+                      OR JOIN FRIEND'S ROOM CODE:
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={joinCodeInput}
+                        onChange={(e) => setJoinCodeInput(e.target.value.toLowerCase())}
+                        onKeyDown={(e) => e.key === 'Enter' && handleJoinFriendMatch(joinCodeInput)}
+                        placeholder="e.g. fs9mcg"
+                        className="flex-1 border-3 border-black p-2 font-mono text-base uppercase bg-white text-black font-bold focus:outline-none shadow-[2px_2px_0_0_#000] text-center"
+                        maxLength={8}
+                      />
+                      <button
+                        onClick={() => handleJoinFriendMatch(joinCodeInput)}
+                        disabled={isJoiningRoom}
+                        className="px-4 py-2 bg-[#a3f23d] border-3 border-black font-display text-xs font-black uppercase shadow-[2px_2px_0_0_#000] cursor-pointer disabled:opacity-50"
+                      >
+                        {isJoiningRoom ? 'JOINING...' : 'JOIN →'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -658,25 +705,67 @@ export default function Home() {
   }
 
   // ===================== PLAYING / GAME SCREEN =====================
-  // Strictly bounded single-screen layout with ZERO scrolling on all devices
+  // Full-width stadium layout with zero side gaps & zero vertical scrolling
   return (
-    <div className="h-screen max-h-screen overflow-hidden flex flex-col justify-between bg-[var(--bg-pitch)] p-2 sm:p-3 relative select-none">
-      {/* Pitch down the center */}
-      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] bg-[#d4a373] dark:bg-[#583e26] border-x-4 border-black pointer-events-none z-0">
-        {/* Cricket Stumps at the top */}
-        <div className="absolute top-1.5 left-1/2 -translate-x-1/2 flex items-center gap-1.5 opacity-80">
-          <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
-          <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
-          <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
-        </div>
+    <div className="h-screen max-h-screen overflow-hidden flex flex-col justify-between bg-[#0e131a] p-1.5 sm:p-2.5 relative select-none">
+      {/* Stadium Pitch down the center */}
+      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-full max-w-5xl bg-[#d4a373] dark:bg-[#583e26] border-x-4 border-black pointer-events-none z-0">
+        {match.mode === 'cricket' ? (
+          <>
+            {/* Cricket Stumps at the top */}
+            <div className="absolute top-1.5 left-1/2 -translate-x-1/2 flex items-center gap-1.5 opacity-80">
+              <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
+              <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
+              <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
+            </div>
+            {/* Bowling Crease */}
+            <div className="absolute top-7 left-0 right-0 h-1 bg-white/70" />
+            {/* Cricket Stumps at the bottom */}
+            <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 flex items-center gap-1.5 opacity-80">
+              <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
+              <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
+              <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
+            </div>
+            <div className="absolute bottom-7 left-0 right-0 h-1 bg-white/70" />
+          </>
+        ) : (
+          <>
+            {/* Baseball Diamond Visuals */}
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 w-5 h-5 bg-white border-2 border-black rotate-45 shadow-[1px_1px_0_#000]" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-2.5 bg-white border-2 border-black shadow-[1px_1px_0_#000]" />
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex flex-col items-center">
+              <div className="w-6 h-3 bg-white border-2 border-black border-b-0 shadow-[1px_1px_0_#000]" />
+              <div className="w-0 h-0 border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent border-t-[8px] border-t-white" />
+            </div>
+            <div className="absolute top-6 left-1/4 bottom-6 w-0.5 bg-white/40 -rotate-12" />
+            <div className="absolute top-6 right-1/4 bottom-6 w-0.5 bg-white/40 rotate-12" />
+          </>
+        )}
       </div>
 
+      {/* Floating Desktop Room Invite Pill (when in multiplayer) */}
+      {activeRoom && (
+        <div className="hidden lg:flex items-center gap-2 absolute right-4 top-3 bg-black/80 border-3 border-black px-3 py-1.5 text-white shadow-[4px_4px_0_0_#000] z-20">
+          <span className="w-2 h-2 rounded-full bg-[#a3f23d] animate-ping" />
+          <span className="font-num text-xs font-black text-[#a3f23d]">
+            ROOM {activeRoom.code.toUpperCase()}
+          </span>
+          <button
+            onClick={handleCopyInviteLink}
+            className="ml-2 px-2 py-0.5 bg-[#ffd60a] hover:bg-[#ffc700] text-black font-num text-[11px] font-black uppercase border border-black flex items-center gap-1 cursor-pointer"
+          >
+            <Copy className="w-3 h-3" />
+            {copied ? 'COPIED!' : 'COPY LINK'}
+          </button>
+        </div>
+      )}
+
       {/* Top Header Bar */}
-      <header className="relative z-10 w-full flex items-center justify-between flex-shrink-0 h-8 max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto">
+      <header className="relative z-10 w-full flex items-center justify-between flex-shrink-0 h-8 max-w-5xl mx-auto">
         {/* Game Mode Pill */}
         <div className="flex items-center gap-1.5 px-2.5 py-0.5 bg-[var(--accent-lime)] border-2 sm:border-3 border-black font-num text-[11px] font-black text-black shadow-[2px_2px_0_0_#000]">
-          <span>{match.mode === 'cricket' ? '🏏' : '⚾'}</span>
-          <span>{match.mode === 'cricket' ? 'HAND CRICKET' : 'BASEBALL'} {match.format}</span>
+          <span>{isBaseball ? '⚾' : '🏏'}</span>
+          <span>{isBaseball ? 'BASEBALL' : 'HAND CRICKET'} {match.format}</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -693,7 +782,7 @@ export default function Home() {
       </header>
 
       {/* Main Gameplay Screen Area */}
-      <main className="relative z-10 flex-1 flex flex-col items-center justify-center gap-2 sm:gap-3 max-w-2xl sm:max-w-3xl md:max-w-[760px] mx-auto w-full min-h-0 py-0.5">
+      <main className="relative z-10 flex-1 flex flex-col items-center justify-between gap-1.5 sm:gap-2 max-w-5xl mx-auto w-full min-h-0 py-0.5">
         {/* Innings Break Notification Overlay */}
         {match.phase === 'innings_break' && (
           <div className="absolute inset-0 z-30 flex items-center justify-center p-4 bg-black/60">
@@ -713,111 +802,268 @@ export default function Home() {
                 onClick={handleStartSecondInnings}
                 className="nb-btn nb-btn--lime w-full text-sm border-3"
               >
-                START CHASE →
+                START SECOND INNINGS →
               </button>
             </div>
           </div>
         )}
 
-        {/* 1. Scoreboard (sits on the pitch) */}
+        {/* 1. Scoreboard */}
         <Scoreboard match={match} lastEvent={lastBallEvent} />
 
-        {/* 2. Side-by-Side Video & Opponent Feeds (Significantly enlarged boxes to fill pitch, Matches Ref Image 2) */}
-        <div className="grid grid-cols-2 gap-2 sm:gap-3.5 w-full flex-shrink-0">
-          {/* Player 1 (You) Feed */}
-          <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[260px] sm:h-[290px] md:h-[310px]">
-            {/* Yellow window bar */}
-            <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2.5 py-1 flex items-center justify-between text-black flex-shrink-0">
-              <div className="flex items-center gap-1.5 font-num text-[11px] sm:text-xs font-black uppercase truncate max-w-[140px]">
-                <span className="w-2.5 h-2.5 rounded-full border border-black bg-white inline-block flex-shrink-0" />
-                <span>{myName}</span>
-                {match.phase === 'innings1' || match.phase === 'innings2' ? (
-                  <span className="opacity-75">({myIsBatting ? 'BAT' : 'BOWL'})</span>
-                ) : null}
-              </div>
-              {myThrowReady ? (
-                <span className="font-num text-[9px] px-1.5 py-0.5 bg-[#a3f23d] border border-black font-black">
-                  READY
-                </span>
-              ) : null}
-            </div>
-
-            {/* Webcam Box */}
-            <div className="relative w-full flex-1 bg-black min-h-0 overflow-hidden">
-              <WebcamHandTracker
-                playerLabel={myName}
-                isThrowRequired={myThrowRequired}
-                ballCycle={ballCycle}
-                onThrowConfirmed={handlePlayerThrow}
-              />
-            </div>
-          </div>
-
-          {/* Player 2 (Computer / Opponent) Feed */}
-          <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[260px] sm:h-[290px] md:h-[310px]">
-            {/* Pink window bar with O O O COMPUTER / OPPONENT */}
-            <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2.5 py-1 flex items-center justify-between text-black flex-shrink-0">
-              <div className="flex items-center gap-1.5 font-num text-[11px] sm:text-xs font-black uppercase truncate max-w-[140px]">
-                <div className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
-                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
-                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
-                </div>
-                <span>{oppName.toUpperCase()}</span>
-                {match.phase === 'innings1' || match.phase === 'innings2' ? (
-                  <span className="opacity-75">({oppIsBatting ? 'BAT' : 'BOWL'})</span>
-                ) : null}
-              </div>
-              {oppThrowReady ? (
-                <span className="font-num text-[9px] px-1.5 py-0.5 bg-[#a3f23d] border border-black font-black">
-                  READY
-                </span>
-              ) : null}
-            </div>
-
-            {/* Solid Blue Card with White Retro SVG Robot & Move Display */}
-            <div className="relative w-full flex-1 bg-[#2563eb] border-2 border-black flex flex-col items-center justify-center p-2 text-white min-h-0 select-none overflow-hidden">
-              {activeRoom ? (
-                <div className="flex flex-col items-center justify-center mb-1">
-                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/20 border-3 border-white flex items-center justify-center mb-1 shadow-[2px_2px_0_#000]">
-                    <Users className="w-9 h-9 sm:w-11 sm:h-11 text-white" />
-                  </div>
-                  <span className="font-num text-xs sm:text-sm font-black uppercase tracking-wider text-white">
-                    {oppName}
-                  </span>
-                </div>
-              ) : (
-                /* Retro Robot SVG Icon */
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  className="w-16 h-16 sm:w-20 sm:h-20 text-white drop-shadow-[2px_2px_0_#000]"
+        {/* Ball History Strip */}
+        {match.ballHistory.length > 0 && (
+          <div className="w-full max-w-5xl mx-auto flex-shrink-0">
+            <div className="flex items-center gap-1 overflow-x-auto px-1 py-1 bg-black/80 border-2 border-black no-scrollbar">
+              {match.ballHistory.slice(-20).map((ball, i) => (
+                <div
+                  key={i}
+                  className={`flex-shrink-0 w-6 h-6 sm:w-7 sm:h-7 flex items-center justify-center font-num text-[11px] sm:text-xs font-black border-2 border-black ${
+                    ball.isOut
+                      ? 'bg-[#ff3b30] text-white animate-pulse'
+                      : ball.isDouble
+                      ? 'bg-[#a3f23d] text-black'
+                      : ball.isStrike
+                      ? 'bg-[#ffd60a] text-black'
+                      : ball.runsScored === 0
+                      ? 'bg-[#444] text-white'
+                      : ball.runsScored >= 4
+                      ? 'bg-[#4dabf7] text-black'
+                      : 'bg-white text-black'
+                  }`}
+                  title={ball.description}
                 >
-                  <rect x="11" y="1" width="2" height="3" rx="1" />
-                  <circle cx="12" cy="1" r="1.5" />
-                  <rect x="4" y="4" width="16" height="10" rx="2" />
-                  <rect x="7" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
-                  <rect x="14" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
-                  <rect x="9" y="11" width="6" height="1.5" rx="0.5" fill="#2563eb" />
-                  <rect x="2" y="7" width="2" height="4" rx="1" />
-                  <rect x="20" y="7" width="2" height="4" rx="1" />
-                  <path d="M5 15h14v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5z" />
-                  <rect x="2" y="16" width="2" height="4" rx="1" />
-                  <rect x="20" y="16" width="2" height="4" rx="1" />
-                </svg>
-              )}
-
-              {/* Move Number Display Below Robot / Opponent */}
-              {oppDisplayedThrow !== null || match.phase === 'match_over' ? (
-                <div className="font-display text-5xl sm:text-6xl font-black text-white leading-none mt-1 animate-bounce-in drop-shadow-[2px_2px_0_#000]">
-                  {oppDisplayedThrow !== null ? oppDisplayedThrow : 0}
+                  {ball.isOut ? (isBaseball ? 'K' : 'W') : ball.isStrike ? 'S' : ball.isDouble ? '2x' : ball.runsScored}
                 </div>
-              ) : null}
+              ))}
+              <span className="font-num text-[10px] text-white/60 ml-1.5 flex-shrink-0">← balls</span>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* 3. Commentary Card (Unified Toss, Commentary, and Match Over) */}
+        {/* 2. Feeds: 4 boxes in 2v2 mode, or 2 large boxes in 1v1 mode */}
+        {is2v2 ? (
+          /* 2v2: 4 boxes in a 2x2 grid */
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 w-full flex-shrink-0">
+            {/* Box 1: You (Camera) - Top Left */}
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[140px] sm:h-[160px] md:h-[180px]">
+              <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
+                <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
+                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
+                  <span>{myName} (YOU)</span>
+                  <span className="opacity-75">[{myIsBatting ? 'BAT' : isBaseball ? 'PITCH' : 'BOWL'}]</span>
+                </div>
+                {myThrowReady && (
+                  <span className="font-num text-[9px] px-1 bg-[#a3f23d] border border-black font-black">READY</span>
+                )}
+              </div>
+              <div className="relative w-full flex-1 bg-black min-h-0 overflow-hidden">
+                <WebcamHandTracker
+                  playerLabel={myName}
+                  isThrowRequired={myThrowRequired}
+                  ballCycle={ballCycle}
+                  onThrowConfirmed={handlePlayerThrow}
+                />
+              </div>
+            </div>
+
+            {/* Box 2: Opponent 1 - Top Right */}
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[140px] sm:h-[160px] md:h-[180px]">
+              <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
+                <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
+                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
+                  <span>{oppName.toUpperCase()} 1</span>
+                  <span className="opacity-75">[{oppIsBatting ? 'BAT' : isBaseball ? 'PITCH' : 'BOWL'}]</span>
+                </div>
+                {oppThrowReady && (
+                  <span className="font-num text-[9px] px-1 bg-[#a3f23d] border border-black font-black">READY</span>
+                )}
+              </div>
+              <div className="relative w-full flex-1 bg-[#2563eb] border-2 border-black flex flex-col items-center justify-center p-2 text-white min-h-0 select-none overflow-hidden">
+                {activeRoom && activeRoom.players.length < 2 ? (
+                  <div className="flex flex-col items-center justify-center text-center">
+                    <span className="font-num text-[11px] font-black text-[#ffd60a]">WAITING FOR FRIEND...</span>
+                    <button
+                      onClick={handleCopyInviteLink}
+                      className="mt-1 px-2 py-0.5 bg-[#ffd60a] text-black font-num text-[10px] font-bold border border-black cursor-pointer"
+                    >
+                      {copied ? 'COPIED!' : 'COPY LINK'}
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <Bot className="w-8 h-8 text-white drop-shadow-[1px_1px_0_#000]" />
+                    {oppDisplayedThrow !== null && (
+                      <div className="font-display text-3xl font-black text-white leading-none mt-0.5 drop-shadow-[2px_2px_0_#000]">
+                        {oppDisplayedThrow}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Box 3: Teammate (Player A2) - Bottom Left */}
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[140px] sm:h-[160px] md:h-[180px]">
+              <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
+                <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
+                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
+                  <span>{match.teamA.players[1]?.name || 'TEAMMATE'}</span>
+                  <span className="opacity-75">[PARTNER]</span>
+                </div>
+              </div>
+              <div className="relative w-full flex-1 bg-[#1e293b] flex flex-col items-center justify-center p-2 text-white min-h-0 select-none">
+                <Users className="w-8 h-8 text-[#a3f23d] drop-shadow-[1px_1px_0_#000]" />
+                <span className="font-num text-[10px] text-white/70 uppercase mt-1">
+                  {match.teamA.players[1]?.isOut ? '❌ OUT' : 'ON DECK'}
+                </span>
+              </div>
+            </div>
+
+            {/* Box 4: Opponent 2 (Player B2) - Bottom Right */}
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[140px] sm:h-[160px] md:h-[180px]">
+              <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
+                <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
+                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
+                  <span>{match.teamB.players[1]?.name || 'OPPONENT 2'}</span>
+                  <span className="opacity-75">[PARTNER]</span>
+                </div>
+              </div>
+              <div className="relative w-full flex-1 bg-[#1e3a8a] flex flex-col items-center justify-center p-2 text-white min-h-0 select-none">
+                <Users className="w-8 h-8 text-[#ffd60a] drop-shadow-[1px_1px_0_#000]" />
+                <span className="font-num text-[10px] text-white/70 uppercase mt-1">
+                  {match.teamB.players[1]?.isOut ? '❌ OUT' : 'ON DECK'}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* 1v1: 2 large side-by-side feeds */
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 w-full flex-shrink-0">
+            {/* Player 1 (You) Feed */}
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[270px] sm:h-[300px] md:h-[330px]">
+              {/* Yellow window bar */}
+              <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2.5 py-1 flex items-center justify-between text-black flex-shrink-0">
+                <div className="flex items-center gap-1.5 font-num text-[11px] sm:text-xs font-black uppercase truncate max-w-[160px]">
+                  <span className="w-2.5 h-2.5 rounded-full border border-black bg-white inline-block flex-shrink-0" />
+                  <span>{myName}</span>
+                  {match.phase === 'innings1' || match.phase === 'innings2' ? (
+                    <span className="opacity-75">
+                      ({myIsBatting ? 'BAT' : isBaseball ? 'PITCH' : 'BOWL'})
+                    </span>
+                  ) : null}
+                </div>
+                {myThrowReady ? (
+                  <span className="font-num text-[9px] px-1.5 py-0.5 bg-[#a3f23d] border border-black font-black">
+                    READY
+                  </span>
+                ) : null}
+              </div>
+
+              {/* Webcam Box */}
+              <div className="relative w-full flex-1 bg-black min-h-0 overflow-hidden">
+                <WebcamHandTracker
+                  playerLabel={myName}
+                  isThrowRequired={myThrowRequired}
+                  ballCycle={ballCycle}
+                  onThrowConfirmed={handlePlayerThrow}
+                />
+              </div>
+            </div>
+
+            {/* Player 2 (Computer / Opponent) Feed */}
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[270px] sm:h-[300px] md:h-[330px]">
+              {/* Pink window bar */}
+              <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2.5 py-1 flex items-center justify-between text-black flex-shrink-0">
+                <div className="flex items-center gap-1.5 font-num text-[11px] sm:text-xs font-black uppercase truncate max-w-[160px]">
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
+                    <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
+                    <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
+                  </div>
+                  <span>{oppName.toUpperCase()}</span>
+                  {match.phase === 'innings1' || match.phase === 'innings2' ? (
+                    <span className="opacity-75">
+                      ({oppIsBatting ? 'BAT' : isBaseball ? 'PITCH' : 'BOWL'})
+                    </span>
+                  ) : null}
+                </div>
+                {oppThrowReady ? (
+                  <span className="font-num text-[9px] px-1.5 py-0.5 bg-[#a3f23d] border border-black font-black">
+                    READY
+                  </span>
+                ) : null}
+              </div>
+
+              {/* Opponent Card / Waiting State */}
+              <div className="relative w-full flex-1 bg-[#2563eb] border-2 border-black flex flex-col items-center justify-center p-2 text-white min-h-0 select-none overflow-hidden">
+                {activeRoom && activeRoom.players.length < 2 ? (
+                  /* In-game waiting state for friend with room code & copy button */
+                  <div className="flex flex-col items-center justify-center text-center p-3 w-full h-full animate-slide-up">
+                    <div className="w-3.5 h-3.5 rounded-full bg-[#a3f23d] animate-ping mb-2" />
+                    <span className="font-num text-xs sm:text-sm font-black uppercase tracking-wider text-[#ffd60a] mb-1">
+                      WAITING FOR FRIEND TO JOIN...
+                    </span>
+                    <div className="bg-black/70 border-3 border-black px-4 py-1.5 mb-2.5 shadow-[2px_2px_0_0_#000]">
+                      <span className="font-mono text-3xl font-black text-white tracking-widest">
+                        {activeRoom.code.toUpperCase()}
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleCopyInviteLink}
+                      className="px-4 py-2 bg-[#ffd60a] hover:bg-[#ffc700] text-black border-2 border-black font-display text-xs sm:text-sm font-black uppercase shadow-[3px_3px_0_0_#000] flex items-center gap-2 cursor-pointer transition-all"
+                    >
+                      {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      <span>{copied ? 'LINK COPIED!' : 'COPY INVITE LINK'}</span>
+                    </button>
+                    <span className="font-num text-[10px] text-white/80 mt-2 max-w-xs">
+                      Share this code or link with your friend to connect instantly!
+                    </span>
+                  </div>
+                ) : activeRoom ? (
+                  /* Connected Friend */
+                  <div className="flex flex-col items-center justify-center mb-1">
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/20 border-3 border-white flex items-center justify-center mb-1 shadow-[2px_2px_0_#000]">
+                      <Users className="w-9 h-9 sm:w-11 sm:h-11 text-white" />
+                    </div>
+                    <span className="font-num text-xs sm:text-sm font-black uppercase tracking-wider text-white">
+                      {oppName}
+                    </span>
+                  </div>
+                ) : (
+                  /* Retro Robot SVG */
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    className="w-16 h-16 sm:w-20 sm:h-20 text-white drop-shadow-[2px_2px_0_#000]"
+                  >
+                    <rect x="11" y="1" width="2" height="3" rx="1" />
+                    <circle cx="12" cy="1" r="1.5" />
+                    <rect x="4" y="4" width="16" height="10" rx="2" />
+                    <rect x="7" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
+                    <rect x="14" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
+                    <rect x="9" y="11" width="6" height="1.5" rx="0.5" fill="#2563eb" />
+                    <rect x="2" y="7" width="2" height="4" rx="1" />
+                    <rect x="20" y="7" width="2" height="4" rx="1" />
+                    <path d="M5 15h14v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5z" />
+                    <rect x="2" y="16" width="2" height="4" rx="1" />
+                    <rect x="20" y="16" width="2" height="4" rx="1" />
+                  </svg>
+                )}
+
+                {/* Throw Number Display */}
+                {(activeRoom ? activeRoom.players.length >= 2 : true) &&
+                  (oppDisplayedThrow !== null || match.phase === 'match_over') && (
+                    <div className="font-display text-5xl sm:text-6xl font-black text-white leading-none mt-1 animate-bounce-in drop-shadow-[2px_2px_0_#000]">
+                      {oppDisplayedThrow !== null ? oppDisplayedThrow : 0}
+                    </div>
+                  )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 3. Commentary Card */}
         <CommentaryCard
           match={match}
           lastEvent={lastBallEvent}
@@ -838,7 +1084,7 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Pop-up Overlay Keyboard Fallback so it NEVER pushes layout */}
+        {/* Pop-up Overlay Keyboard Fallback */}
         {showTouchKeyboard && (
           <div className="fixed bottom-12 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-3 border-black p-2.5 shadow-[6px_6px_0_0_#000] z-50 animate-slide-up">
             <div className="flex justify-between items-center mb-1">
@@ -915,7 +1161,7 @@ function HowToPlayModal({ onClose }: { onClose: () => void }) {
             <ul className="space-y-1 text-xs font-body text-[#333] list-disc pl-4">
               <li><strong>Hold 1.5s:</strong> Keep your gesture steady to lock your throw.</li>
               <li><strong>Cricket:</strong> Batter scores their throw. If both throw the same number → OUT!</li>
-              <li><strong>Baseball:</strong> Difference of 1 is a strike. 3 strikes = OUT! Same throw at 0 strikes = double runs!</li>
+              <li><strong>Baseball:</strong> Difference of 1 (or 6 and 1) is a strike. 3 consecutive strikes = OUT! Same throw at 0 strikes = double runs! Hits reset strike count.</li>
               <li><strong>2v2 Mode:</strong> Both batters must be dismissed. Bowlers rotate every 6 balls (1 over).</li>
             </ul>
           </div>

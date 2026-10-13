@@ -51,9 +51,10 @@ export const baseballBallRule: BallRuleConfig = {
   ): BallResolutionResult => {
     const currentStrikes = context?.currentStrikes ?? 0;
     const diff = Math.abs(batterThrow - bowlerThrow);
+    // Rule 1: Difference of 1 or circular (6 and 1) is a strike
+    const isStrikeDiff = diff === 1 || (batterThrow === 6 && bowlerThrow === 1) || (batterThrow === 1 && bowlerThrow === 6);
 
-    // Rule 1: Difference of exactly 1 is a strike
-    if (diff === 1) {
+    if (isStrikeDiff) {
       const nextStrikes = currentStrikes + 1;
       const isOut = nextStrikes >= 3;
       return {
@@ -63,7 +64,7 @@ export const baseballBallRule: BallRuleConfig = {
         newStrikesCount: nextStrikes,
         description: isOut
           ? `STRIKE 3! Batter is OUT!`
-          : `Strike! (${batterThrow} vs ${bowlerThrow}) - Strike ${nextStrikes}/3`,
+          : `Strike! (${batterThrow} vs ${bowlerThrow}) - Consecutive Strike ${nextStrikes}/3`,
       };
     }
 
@@ -80,7 +81,7 @@ export const baseballBallRule: BallRuleConfig = {
           description: `Double: ${doubleRuns} runs! (${batterThrow} = ${bowlerThrow})`,
         };
       } else {
-        // If batter has >= 1 strike, it counts as a strike, not a double
+        // If batter has >= 1 strike, equal throw counts as a strike
         const nextStrikes = currentStrikes + 1;
         const isOut = nextStrikes >= 3;
         return {
@@ -90,16 +91,16 @@ export const baseballBallRule: BallRuleConfig = {
           newStrikesCount: nextStrikes,
           description: isOut
             ? `STRIKE 3 on equal throw! Batter is OUT!`
-            : `Strike! (Equal throw ${batterThrow} while on strike) - Strike ${nextStrikes}/3`,
+            : `Strike! (Equal throw ${batterThrow} while on strike) - Consecutive Strike ${nextStrikes}/3`,
         };
       }
     }
 
-    // Rule 3: Otherwise batter scores b runs
+    // Rule 3: Otherwise batter scores runs and consecutive strike count resets to 0
     return {
       runs: batterThrow,
       isOut: false,
-      newStrikesCount: currentStrikes,
+      newStrikesCount: 0,
       description: `+${batterThrow} run${batterThrow === 1 ? '' : 's'}!`,
     };
   },

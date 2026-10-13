@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { baseballBallRule } from '../rules';
-import { createInitialMatch, setTossCall, resolveTossThrows, selectTossChoice, playBall, startInnings2 } from '../match';
+import { createInitialMatch, setTossCall, resolveTossThrows, selectTossChoice, playBall } from '../match';
 
 describe('Phase 2 Pure Baseball Mode Rules', () => {
   it('strike on difference of 1 at 1 vs 2', () => {
@@ -19,19 +19,26 @@ describe('Phase 2 Pure Baseball Mode Rules', () => {
     expect(res.isOut).toBe(false);
   });
 
-  it('strike on difference of 1 at 0 vs 1', () => {
-    const res = baseballBallRule.resolveBall(0, 1, { currentStrikes: 1 });
-    expect(res.isStrike).toBe(true);
-    expect(res.runs).toBe(0);
-    expect(res.newStrikesCount).toBe(2);
-    expect(res.isOut).toBe(false);
+  it('strike on 6 and 1 (wrap-around / difference of 5 between 6 and 1)', () => {
+    const res1 = baseballBallRule.resolveBall(6, 1, { currentStrikes: 0 });
+    expect(res1.isStrike).toBe(true);
+    expect(res1.runs).toBe(0);
+    expect(res1.newStrikesCount).toBe(1);
+    expect(res1.isOut).toBe(false);
+
+    const res2 = baseballBallRule.resolveBall(1, 6, { currentStrikes: 1 });
+    expect(res2.isStrike).toBe(true);
+    expect(res2.runs).toBe(0);
+    expect(res2.newStrikesCount).toBe(2);
+    expect(res2.isOut).toBe(false);
   });
 
-  it('difference of 5 is NOT a strike, batter scores throw', () => {
-    // 6 vs 1 -> diff = 5 != 1
-    const res = baseballBallRule.resolveBall(6, 1, { currentStrikes: 0 });
+  it('non-strike throws score runs and reset strike count', () => {
+    // 6 vs 2 -> diff = 4, not a strike
+    const res = baseballBallRule.resolveBall(6, 2, { currentStrikes: 2 });
     expect(res.isStrike).toBeFalsy();
     expect(res.runs).toBe(6);
+    expect(res.newStrikesCount).toBe(0);
     expect(res.isOut).toBe(false);
   });
 
@@ -53,8 +60,7 @@ describe('Phase 2 Pure Baseball Mode Rules', () => {
     expect(res.isOut).toBe(false);
   });
 
-  it('three strikes = out, innings ends', () => {
-    // Already has 2 strikes, gets a 3rd strike
+  it('three consecutive strikes = out', () => {
     const res = baseballBallRule.resolveBall(3, 4, { currentStrikes: 2 });
     expect(res.isStrike).toBe(true);
     expect(res.newStrikesCount).toBe(3);
@@ -62,39 +68,49 @@ describe('Phase 2 Pure Baseball Mode Rules', () => {
     expect(res.description).toContain('STRIKE 3! Batter is OUT!');
   });
 
-  it('runs match end to end in baseball mode', () => {
+  it('non-consecutive strikes do not cause out (hit resets strike streak)', () => {
     let match = createInitialMatch({ mode: 'baseball', format: '1v1' });
     match = setTossCall(match, 'team_a', 'odd');
-    match = resolveTossThrows(match, 1, 2); // 3 = odd, A wins
-    match = selectTossChoice(match, 'bat'); // A bats
+    match = resolveTossThrows(match, 1, 2);
+    match = selectTossChoice(match, 'bat');
 
-    // Ball 1: Double (3 and 3 with 0 strikes) -> 6 runs
-    let step = playBall(match, 3, 3);
+    // Strike 1 (4 vs 5)
+    let step = playBall(match, 4, 5);
     match = step.nextState;
-    expect(match.innings1.score).toBe(6);
+    expect(step.event.isStrike).toBe(true);
     expect(match.innings1.wickets).toBe(0);
 
-    // Ball 2: Strike 1 (batter 4, bowler 5) -> 0 runs, strike 1
-    step = playBall(match, 4, 5);
-    match = step.nextState;
-    expect(match.innings1.score).toBe(6);
-    expect(step.event.isStrike).toBe(true);
-
-    // Ball 3: Regular runs (batter 6, bowler 2) -> 6 runs (Total: 12)
-    step = playBall(match, 6, 2);
-    match = step.nextState;
-    expect(match.innings1.score).toBe(12);
-
-    // Ball 4: Strike 2 (batter 2, bowler 2 while on strike 1)
-    step = playBall(match, 2, 2);
+    // Strike 2 (6 vs 1 -> 6 and 1 strike rule!)
+    step = playBall(match, 6, 1);
     match = step.nextState;
     expect(step.event.isStrike).toBe(true);
+    expect(match.innings1.wickets).toBe(0);
 
-    // Ball 5: Strike 3 (batter 1, bowler 2) -> OUT!
-    step = playBall(match, 1, 2);
+    // Hit (5 vs 2) -> Resets consecutive strikes!
+    step = playBall(match, 5, 2);
+    match = step.nextState;
+    expect(step.event.isStrike).toBeFalsy();
+    expect(match.innings1.score).toBe(5);
+    expect(match.innings1.wickets).toBe(0);
+
+    // Strike 1 again (2 vs 3) -> 1st strike in new streak, NOT out!
+    step = playBall(match, 2, 3);
+    match = step.nextState;
+    expect(step.event.isStrike).toBe(true);
+    expect(match.innings1.wickets).toBe(0);
+    expect(match.phase).toBe('innings1');
+
+    // Strike 2 again (3 vs 2)
+    step = playBall(match, 3, 2);
+    match = step.nextState;
+    expect(step.event.isStrike).toBe(true);
+    expect(match.innings1.wickets).toBe(0);
+
+    // Strike 3 consecutive (1 vs 6) -> 3 in a row -> OUT!
+    step = playBall(match, 1, 6);
     match = step.nextState;
     expect(step.event.isOut).toBe(true);
     expect(match.phase).toBe('innings_break');
-    expect(match.target).toBe(13);
+    expect(match.target).toBe(6);
   });
 });

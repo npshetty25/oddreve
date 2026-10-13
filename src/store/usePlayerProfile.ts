@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { create } from 'zustand';
 
 const STORAGE_KEY = 'oddoreve-player';
 
@@ -28,20 +28,32 @@ function getStoredProfile(): PlayerProfile | null {
 
 function saveProfile(profile: PlayerProfile) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+  } catch {}
 }
 
-export function usePlayerProfile() {
-  const [profile, setProfile] = useState<PlayerProfile | null>(null);
+interface PlayerProfileStore {
+  profile: PlayerProfile | null;
+  initProfile: () => void;
+  createProfile: (name: string, username?: string) => PlayerProfile;
+  updateName: (name: string) => void;
+  recordGame: (won: boolean) => void;
+  clearProfile: () => void;
+}
 
-  useEffect(() => {
+export const usePlayerProfile = create<PlayerProfileStore>((set, get) => ({
+  profile: null,
+
+  initProfile: () => {
+    if (get().profile) return;
     const existing = getStoredProfile();
     if (existing) {
-      setProfile(existing);
+      set({ profile: existing });
     }
-  }, []);
+  },
 
-  const createProfile = useCallback((name: string, username?: string) => {
+  createProfile: (name: string, username?: string) => {
     const newProfile: PlayerProfile = {
       id: generatePlayerId(),
       name: name.trim() || 'Player',
@@ -51,32 +63,34 @@ export function usePlayerProfile() {
       createdAt: new Date().toISOString(),
     };
     saveProfile(newProfile);
-    setProfile(newProfile);
+    set({ profile: newProfile });
     return newProfile;
-  }, []);
+  },
 
-  const updateName = useCallback((name: string) => {
-    if (!profile) return;
-    const updated = { ...profile, name: name.trim() || 'Player' };
+  updateName: (name: string) => {
+    const current = get().profile;
+    if (!current) return;
+    const updated = { ...current, name: name.trim() || 'Player' };
     saveProfile(updated);
-    setProfile(updated);
-  }, [profile]);
+    set({ profile: updated });
+  },
 
-  const recordGame = useCallback((won: boolean) => {
-    if (!profile) return;
+  recordGame: (won: boolean) => {
+    const current = get().profile;
+    if (!current) return;
     const updated = {
-      ...profile,
-      gamesPlayed: profile.gamesPlayed + 1,
-      gamesWon: profile.gamesWon + (won ? 1 : 0),
+      ...current,
+      gamesPlayed: current.gamesPlayed + 1,
+      gamesWon: current.gamesWon + (won ? 1 : 0),
     };
     saveProfile(updated);
-    setProfile(updated);
-  }, [profile]);
+    set({ profile: updated });
+  },
 
-  const clearProfile = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
-    setProfile(null);
-  }, []);
-
-  return { profile, createProfile, updateName, recordGame, clearProfile };
-}
+  clearProfile: () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+    set({ profile: null });
+  },
+}));

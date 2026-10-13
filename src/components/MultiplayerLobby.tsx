@@ -1,12 +1,15 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Copy, Check, Send, Users, Play, ArrowLeft, QrCode } from 'lucide-react';
+import { Copy, Check, Play, ArrowLeft } from 'lucide-react';
 import { ServerRoom } from '@/app/api/rooms/route';
+import { GameMode, GameFormat } from '@/engine/types';
 
 interface MultiplayerLobbyProps {
   initialRoomCode?: string | null;
   playerName: string;
+  gameMode: GameMode;
+  gameFormat: GameFormat;
   onStartMatch: (room: ServerRoom, playerId: string) => void;
   onBack: () => void;
 }
@@ -14,16 +17,19 @@ interface MultiplayerLobbyProps {
 export function MultiplayerLobby({
   initialRoomCode,
   playerName,
+  gameMode,
+  gameFormat,
   onStartMatch,
   onBack,
 }: MultiplayerLobbyProps) {
-  const [mode, setMode] = useState<'create' | 'join'>(initialRoomCode ? 'join' : 'create');
+  const [lobbyView, setLobbyView] = useState<'choose' | 'create' | 'join'>(
+    initialRoomCode ? 'join' : 'choose'
+  );
   const [joinCodeInput, setJoinCodeInput] = useState(initialRoomCode || '');
   const [currentRoom, setCurrentRoom] = useState<ServerRoom | null>(null);
   const [myPlayerId, setMyPlayerId] = useState<string>('');
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [chatInput, setChatInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -62,12 +68,17 @@ export function MultiplayerLobby({
       const res = await fetch('/api/rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerName: playerName || 'Host', mode: 'cricket', format: '1v1' }),
+        body: JSON.stringify({
+          playerName: playerName || 'Host',
+          mode: gameMode,
+          format: gameFormat,
+        }),
       });
       const data = await res.json();
       if (data.success) {
         setCurrentRoom(data.room);
         setMyPlayerId(data.playerId);
+        setLobbyView('create'); // switch to "waiting" view
       } else {
         setErrorMsg(data.error || 'Failed to create room');
       }
@@ -113,6 +124,7 @@ export function MultiplayerLobby({
     if (initialRoomCode && !currentRoom) {
       handleJoinRoom(initialRoomCode);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialRoomCode]);
 
   // Copy direct game link
@@ -122,27 +134,6 @@ export function MultiplayerLobby({
     navigator.clipboard?.writeText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  // Send Chat Message
-  const handleSendChat = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatInput.trim() || !currentRoom) return;
-    const text = chatInput.trim();
-    setChatInput('');
-    try {
-      await fetch(`/api/rooms/${currentRoom.code}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'chat',
-          sender: playerName || 'Player',
-          text,
-        }),
-      });
-    } catch (e) {
-      // ignore
-    }
   };
 
   // Host starts the match
@@ -168,274 +159,189 @@ export function MultiplayerLobby({
     }
   };
 
-  // 1. Initial State: Choose Create or Join Room
+  const modeLabel = gameMode === 'cricket' ? '🏏 Hand Cricket' : '⚾ Baseball';
+  const formatLabel = gameFormat === '2v2' ? '2v2' : '1v1';
+
+  /* ─── CHOOSE: Create or Join ─── */
   if (!currentRoom) {
     return (
-      <div className="w-full max-w-xl mx-auto bg-white border-4 border-black shadow-[8px_8px_0_0_#000] p-6 animate-slide-up select-none">
-        <div className="flex items-center justify-between pb-3 border-b-3 border-black mb-5">
-          <button onClick={onBack} className="nb-btn nb-btn--ghost nb-btn--sm flex items-center gap-1">
-            <ArrowLeft className="w-4 h-4" />
-            <span>BACK</span>
-          </button>
-          <span className="font-display text-base uppercase font-black text-black">
-            PLAY WITH A FRIEND
-          </span>
-          <div className="w-8" />
-        </div>
-
-        {errorMsg && (
-          <div className="mb-4 p-2.5 bg-[#ff3b30] text-white border-2 border-black font-num text-xs font-bold shadow-[2px_2px_0_0_#000]">
-            ⚠️ {errorMsg}
-          </div>
-        )}
-
-        <div className="flex gap-2 mb-6">
-          <button
-            onClick={() => {
-              setMode('create');
-              setErrorMsg(null);
-            }}
-            className={`flex-1 py-2.5 font-display text-sm font-black uppercase border-3 border-black transition-all shadow-[3px_3px_0_0_#000] ${
-              mode === 'create' ? 'bg-[#ffd60a] text-black' : 'bg-neutral-100 text-neutral-600'
-            }`}
-          >
-            CREATE ROOM
-          </button>
-          <button
-            onClick={() => {
-              setMode('join');
-              setErrorMsg(null);
-            }}
-            className={`flex-1 py-2.5 font-display text-sm font-black uppercase border-3 border-black transition-all shadow-[3px_3px_0_0_#000] ${
-              mode === 'join' ? 'bg-[#a3f23d] text-black' : 'bg-neutral-100 text-neutral-600'
-            }`}
-          >
-            JOIN ROOM
-          </button>
-        </div>
-
-        {mode === 'create' ? (
-          <div className="space-y-4 text-center">
-            <div className="p-4 bg-[#f5f0e1] border-2 border-black text-left">
-              <span className="font-num text-xs font-bold text-[#444] uppercase block mb-1">
-                HOST NAME
-              </span>
-              <span className="font-display text-lg text-black">{playerName || 'You'}</span>
-            </div>
-            <p className="font-body text-xs text-[#555]">
-              Creates a private room with a shareable invite code and link. Your friend can join from any phone or computer!
-            </p>
-            <button
-              onClick={handleCreateRoom}
-              disabled={isSubmitting}
-              className="nb-btn nb-btn--yellow w-full py-3.5 text-base border-3"
-            >
-              {isSubmitting ? 'CREATING ROOM...' : 'CREATE ROOM & GET LINK'}
+      <div className="flex flex-col h-full w-full items-center justify-center p-4 select-none">
+        <div className="w-full max-w-sm bg-white border-4 border-black shadow-[6px_6px_0_0_#000] overflow-hidden animate-slide-up">
+          {/* Header bar */}
+          <div className="bg-[#a3f23d] border-b-4 border-black px-4 py-2 flex items-center justify-between">
+            <button onClick={onBack} className="flex items-center gap-1 font-num text-xs font-black uppercase text-black hover:opacity-70">
+              <ArrowLeft className="w-3.5 h-3.5" /> BACK
             </button>
+            <span className="font-display text-sm font-black uppercase text-black tracking-wide">
+              PLAY WITH FRIEND
+            </span>
+            <div className="w-14" />
           </div>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="block font-num text-xs font-bold uppercase text-black mb-1.5">
-                ENTER 6-DIGIT ROOM CODE
-              </label>
-              <input
-                type="text"
-                value={joinCodeInput}
-                onChange={(e) => setJoinCodeInput(e.target.value.toLowerCase())}
-                placeholder="e.g. fs9mcg"
-                className="w-full border-3 border-black p-3 font-mono text-lg uppercase bg-white text-black font-bold focus:outline-none shadow-[2px_2px_0_0_#000]"
-                maxLength={8}
-                autoFocus
-              />
+
+          {/* Mode badge */}
+          <div className="flex items-center gap-2 px-4 py-2 bg-[#ffd60a] border-b-2 border-black">
+            <span className="font-num text-[11px] font-black text-black uppercase">{modeLabel} · {formatLabel}</span>
+          </div>
+
+          {errorMsg && (
+            <div className="mx-4 mt-3 p-2 bg-[#ff3b30] text-white border-2 border-black font-num text-xs font-bold shadow-[2px_2px_0_0_#000]">
+              ⚠️ {errorMsg}
             </div>
-            <button
-              onClick={() => handleJoinRoom(joinCodeInput)}
-              disabled={isSubmitting}
-              className="nb-btn nb-btn--lime w-full py-3 text-base border-3"
-            >
-              {isSubmitting ? 'JOINING ROOM...' : 'JOIN FRIEND\'S ROOM →'}
-            </button>
+          )}
+
+          <div className="p-5 space-y-3">
+            {lobbyView === 'choose' ? (
+              <>
+                <button
+                  onClick={() => { setLobbyView('create'); handleCreateRoom(); }}
+                  className="w-full py-4 bg-[#ffd60a] border-3 border-black font-display text-base font-black uppercase shadow-[4px_4px_0_0_#000] hover:translate-y-[1px] hover:shadow-[3px_3px_0_0_#000] transition-all cursor-pointer"
+                >
+                  🏠 CREATE ROOM
+                  <div className="text-[11px] font-num font-normal mt-0.5 text-[#555]">Get a code to share with your friend</div>
+                </button>
+                <button
+                  onClick={() => { setLobbyView('join'); }}
+                  className="w-full py-4 bg-[#a3f23d] border-3 border-black font-display text-base font-black uppercase shadow-[4px_4px_0_0_#000] hover:translate-y-[1px] hover:shadow-[3px_3px_0_0_#000] transition-all cursor-pointer"
+                >
+                  🔗 JOIN ROOM
+                  <div className="text-[11px] font-num font-normal mt-0.5 text-[#555]">Enter your friend's room code</div>
+                </button>
+              </>
+            ) : lobbyView === 'join' ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="block font-num text-xs font-black uppercase text-black mb-1.5">
+                    ENTER ROOM CODE
+                  </label>
+                  <input
+                    type="text"
+                    value={joinCodeInput}
+                    onChange={(e) => setJoinCodeInput(e.target.value.toLowerCase())}
+                    onKeyDown={(e) => e.key === 'Enter' && handleJoinRoom(joinCodeInput)}
+                    placeholder="e.g. fs9mcg"
+                    className="w-full border-3 border-black p-3 font-mono text-2xl uppercase bg-white text-black font-bold focus:outline-none shadow-[2px_2px_0_0_#000] tracking-widest text-center"
+                    maxLength={8}
+                    autoFocus
+                  />
+                </div>
+                <button
+                  onClick={() => handleJoinRoom(joinCodeInput)}
+                  disabled={isSubmitting}
+                  className="w-full py-3 bg-[#a3f23d] border-3 border-black font-display text-sm font-black uppercase shadow-[3px_3px_0_0_#000] cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmitting ? 'JOINING...' : 'JOIN ROOM →'}
+                </button>
+                <button onClick={() => setLobbyView('choose')} className="w-full text-center font-num text-xs text-[#666] underline">
+                  ← back
+                </button>
+              </div>
+            ) : (
+              /* Creating room, spinner */
+              <div className="flex flex-col items-center justify-center py-6 space-y-2">
+                <div className="w-8 h-8 border-4 border-black border-t-[#a3f23d] rounded-full animate-spin" />
+                <span className="font-num text-xs font-black uppercase text-black">Creating room...</span>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     );
   }
 
-  // 2. Active Lobby State (Replicating User's Wordle Multiplayer Layout from Image 1)
+  /* ─── ACTIVE LOBBY: Waiting for opponent ─── */
   const isHost = currentRoom.hostId === myPlayerId;
   const shareUrl = typeof window !== 'undefined' ? `${window.location.origin}?room=${currentRoom.code}` : '';
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(shareUrl)}`;
+  const bothConnected = currentRoom.players.length >= 2;
 
   return (
-    <div className="w-full max-w-4xl mx-auto bg-[#1e1b4b] border-4 border-black shadow-[10px_10px_0_0_#000] p-4 sm:p-6 text-white animate-slide-up select-none">
-      {/* Top Header */}
-      <div className="flex items-center justify-between pb-3 border-b-2 border-white/20 mb-4">
-        <button
-          onClick={() => {
-            setCurrentRoom(null);
-            onBack();
-          }}
-          className="px-3 py-1 bg-white/10 hover:bg-white/20 border-2 border-white text-xs font-display uppercase tracking-wider cursor-pointer"
-        >
-          ← EXIT LOBBY
-        </button>
-        <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#a3f23d] animate-ping" />
-          <span className="font-num text-xs uppercase font-bold text-white/90">
-            ROOM: {currentRoom.code}
-          </span>
+    <div className="flex flex-col h-full w-full items-center justify-center p-3 select-none">
+      <div className="w-full max-w-sm bg-white border-4 border-black shadow-[6px_6px_0_0_#000] overflow-hidden animate-slide-up">
+        {/* Header */}
+        <div className="bg-black border-b-4 border-black px-4 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#a3f23d] animate-ping" />
+            <span className="font-num text-xs font-black text-[#a3f23d] uppercase">LIVE ROOM</span>
+          </div>
+          <button
+            onClick={() => { setCurrentRoom(null); setLobbyView('choose'); onBack(); }}
+            className="font-num text-[11px] text-white/70 hover:text-white uppercase underline cursor-pointer"
+          >
+            EXIT
+          </button>
         </div>
-      </div>
 
-      {errorMsg && (
-        <div className="mb-4 p-2 bg-red-600 border border-white text-xs font-bold">
-          {errorMsg}
-        </div>
-      )}
-
-      {/* 3-Column Layout Matching Image 1 */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-start">
-        {/* Left Column: Share Key / QR Code / Room Code / Copy Link */}
-        <div className="md:col-span-4 bg-white/5 border-2 border-white/20 p-4 space-y-3.5">
-          <h3 className="font-display text-sm uppercase tracking-wider text-white/90">
-            Share Key
-          </h3>
-
-          {/* QR Code Container */}
-          <div className="w-40 h-40 mx-auto bg-white p-2 border-3 border-black shadow-[3px_3px_0_0_#000] flex items-center justify-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={qrUrl}
-              alt="Scan QR code to join room"
-              className="w-full h-full object-contain"
-            />
+        <div className="p-4 space-y-3">
+          {/* Room Code */}
+          <div className="bg-[#1a1a1a] border-3 border-black p-3 text-center">
+            <div className="font-num text-[11px] text-[#aaa] uppercase mb-1">Room Code</div>
+            <div className="font-mono text-4xl font-black text-[#ffd60a] tracking-widest">
+              {currentRoom.code.toUpperCase()}
+            </div>
           </div>
 
-          <div>
-            <span className="text-[11px] font-num uppercase text-white/70 block">
-              Room Code
-            </span>
-            <span className="font-mono text-3xl font-black text-[#ffd60a] tracking-wider block">
-              {currentRoom.code}
-            </span>
-          </div>
-
-          {/* Yellow Copy Link Button Matching Image 1 */}
+          {/* Copy link button */}
           <button
             onClick={handleCopyLink}
-            className="w-full py-2.5 bg-[#eab308] hover:bg-[#ca8a04] text-black border-2 border-black font-display text-xs font-black uppercase flex items-center justify-center gap-2 shadow-[2px_2px_0_0_#000] cursor-pointer"
+            className="w-full py-2.5 bg-[#ffd60a] border-3 border-black font-display text-sm font-black uppercase shadow-[3px_3px_0_0_#000] flex items-center justify-center gap-2 cursor-pointer hover:translate-y-[1px] hover:shadow-[2px_2px_0_0_#000] transition-all"
           >
-            {copied ? <Check className="w-4 h-4 text-black" /> : <Copy className="w-4 h-4 text-black" />}
-            <span>{copied ? 'LINK COPIED!' : 'COPY LINK'}</span>
+            {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            <span>{copied ? 'LINK COPIED!' : 'COPY INVITE LINK'}</span>
           </button>
 
-          <div className="pt-1 text-[11px] font-num text-white/70">
-            Mode: <strong className="text-white">Competitive</strong>
-            <p className="text-[10px] text-white/50 mt-0.5">Hand Cricket 1v1</p>
-          </div>
-        </div>
-
-        {/* Middle Column: Status / Waiting for Players / Start Match CTA */}
-        <div className="md:col-span-5 flex flex-col items-center justify-center min-h-[260px] p-4 text-center bg-white/5 border-2 border-white/20 space-y-4">
-          <div className="text-3xl animate-bounce">🏏</div>
-
-          {currentRoom.players.length < 2 ? (
-            <div className="space-y-1.5">
-              <h2 className="font-display text-2xl font-black text-white">
-                Waiting for players...
-              </h2>
-              <p className="font-body text-xs text-white/70 max-w-xs">
-                Competitive mode requires 2 players. Share the link or room code with your friend!
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3 w-full">
-              <div className="p-3 bg-[#a3f23d] text-black border-2 border-black shadow-[3px_3px_0_0_#000]">
-                <h2 className="font-display text-xl font-black">
-                  BOTH PLAYERS CONNECTED!
-                </h2>
-                <p className="font-num text-xs font-bold mt-0.5">
-                  {currentRoom.players[0].name} vs {currentRoom.players[1].name}
-                </p>
+          {/* Players */}
+          <div className="space-y-2">
+            {currentRoom.players.map((p, i) => (
+              <div key={p.id} className={`flex items-center gap-2.5 px-3 py-2.5 border-3 border-black font-num text-sm font-black ${i === 0 ? 'bg-[#a3f23d]' : 'bg-[#4dabf7]'} text-black`}>
+                <span className="w-2.5 h-2.5 rounded-full bg-black" />
+                <span className="flex-1 truncate">{p.name}</span>
+                {p.id === myPlayerId && <span className="text-[10px] font-num text-black/60">(YOU)</span>}
+                {i === 0 && <span className="text-[10px] font-num text-black/60">HOST</span>}
               </div>
+            ))}
+            {!bothConnected && (
+              <div className="flex items-center gap-2.5 px-3 py-2.5 border-3 border-dashed border-[#ccc] bg-[#f5f5f5] font-num text-sm text-[#aaa]">
+                <span className="w-2.5 h-2.5 rounded-full border-2 border-[#ccc] bg-white animate-pulse" />
+                <span>Waiting for friend...</span>
+              </div>
+            )}
+          </div>
 
-              {isHost ? (
-                <button
-                  onClick={handleStartMatchHost}
-                  disabled={isSubmitting}
-                  className="w-full py-3 bg-[#ffd60a] hover:bg-[#eab308] text-black border-3 border-black font-display text-base font-black uppercase shadow-[4px_4px_0_0_#000] cursor-pointer flex items-center justify-center gap-2"
-                >
-                  <Play className="w-5 h-5 fill-current" />
-                  <span>START MATCH NOW</span>
-                </button>
-              ) : (
-                <div className="p-3 bg-white/10 border border-white/30 text-xs font-num font-bold text-white/90">
-                  Waiting for host to start the match...
+          {/* Mode */}
+          <div className="flex items-center justify-center gap-2 px-2 py-1.5 bg-[#f5f5f5] border-2 border-black font-num text-[11px] text-black font-bold">
+            <span>{modeLabel}</span>
+            <span>·</span>
+            <span>{formatLabel}</span>
+          </div>
+
+          {/* Start / Waiting CTA */}
+          {bothConnected ? (
+            isHost ? (
+              <button
+                onClick={handleStartMatchHost}
+                disabled={isSubmitting}
+                className="w-full py-3.5 bg-[#a3f23d] border-3 border-black font-display text-base font-black uppercase shadow-[4px_4px_0_0_#000] cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 hover:translate-y-[1px] hover:shadow-[3px_3px_0_0_#000] transition-all"
+              >
+                <Play className="w-5 h-5 fill-current" />
+                <span>START MATCH!</span>
+              </button>
+            ) : (
+              <div className="py-3 border-3 border-[#a3f23d] bg-[#f0ffd8] text-center">
+                <div className="font-num text-xs font-black uppercase text-black">
+                  ⏳ Waiting for host to start...
                 </div>
-              )}
+              </div>
+            )
+          ) : (
+            <div className="py-2 text-center font-num text-[11px] text-[#888]">
+              Share the code above to invite your friend
             </div>
           )}
-        </div>
 
-        {/* Right Column: Players List & Live Chat Matching Image 1 */}
-        <div className="md:col-span-3 space-y-3">
-          {/* Players Card */}
-          <div className="bg-white/5 border-2 border-white/20 p-3">
-            <div className="font-num text-xs font-bold uppercase text-white/70 mb-2">
-              Players ({currentRoom.players.length})
+          {errorMsg && (
+            <div className="p-2 bg-[#ff3b30] text-white border-2 border-black font-num text-xs font-bold">
+              ⚠️ {errorMsg}
             </div>
-            <div className="space-y-1.5">
-              {currentRoom.players.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex items-center gap-2 px-2.5 py-1.5 bg-white/10 border border-white/20 font-num text-xs font-bold"
-                >
-                  <span className="w-2 h-2 rounded-full bg-[#a3f23d]" />
-                  <span className="truncate">
-                    {p.name} {p.id === myPlayerId ? '(You)' : ''}
-                  </span>
-                </div>
-              ))}
-              {currentRoom.players.length < 2 && (
-                <div className="flex items-center gap-2 px-2.5 py-1.5 bg-white/5 border border-dashed border-white/20 font-num text-xs text-white/40">
-                  <span className="w-2 h-2 rounded-full bg-white/30" />
-                  <span>Waiting...</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Chat Box Matching Image 1 */}
-          <div className="bg-white/5 border-2 border-white/20 p-3 flex flex-col h-56">
-            <div className="text-[11px] font-num uppercase text-white/60 mb-1">
-              Room Chat
-            </div>
-            <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 font-body text-xs text-left mb-2">
-              {currentRoom.chat.map((msg, idx) => (
-                <div key={idx} className="leading-snug">
-                  <span className="font-bold text-[#ffd60a]">{msg.sender}: </span>
-                  <span className="text-white/90">{msg.text}</span>
-                </div>
-              ))}
-            </div>
-
-            <form onSubmit={handleSendChat} className="flex gap-1 mt-auto">
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Chat..."
-                className="flex-1 px-2 py-1 bg-white/10 border border-white/30 text-xs text-white focus:outline-none"
-              />
-              <button
-                type="submit"
-                className="px-2.5 py-1 bg-[#eab308] hover:bg-[#ca8a04] text-black font-num text-xs font-black uppercase cursor-pointer"
-              >
-                Send
-              </button>
-            </form>
-          </div>
+          )}
         </div>
       </div>
     </div>

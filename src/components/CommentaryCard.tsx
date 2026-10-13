@@ -26,8 +26,9 @@ export function CommentaryCard({
   const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
   const isTeamABatting = currentInnings?.battingTeamId === match.teamA.id;
   const isUserWinner = match.phase === 'match_over' && match.result?.winnerTeamId === match.teamA.id;
+  const isBaseball = match.mode === 'baseball';
 
-  // Real canvas-confetti celebration when you win!
+  // Confetti celebration when user wins
   useEffect(() => {
     if (isUserWinner) {
       confetti({
@@ -57,7 +58,7 @@ export function CommentaryCard({
   // 1. TOSS CALL PHASE
   if (match.phase === 'toss_call') {
     return (
-      <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 text-black text-left flex-shrink-0 animate-slide-up">
+      <div className="w-full max-w-5xl mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 text-black text-left flex-shrink-0 animate-slide-up">
         <h3 className="font-display text-xl sm:text-2xl uppercase tracking-tight leading-none mb-1">
           CALL ODD OR EVEN
         </h3>
@@ -82,21 +83,21 @@ export function CommentaryCard({
     );
   }
 
-  // 2. TOSS THROW PHASE (Matches Reference Image 1)
+  // 2. TOSS THROW PHASE
   if (match.phase === 'toss_throw') {
     return (
-      <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 text-black text-left flex-shrink-0 animate-slide-up">
+      <div className="w-full max-w-5xl mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 text-black text-left flex-shrink-0 animate-slide-up">
         <h3 className="font-display text-2xl sm:text-3xl font-black uppercase tracking-tight leading-none mb-1 text-black">
           TOSS THROW
         </h3>
         <p className="font-body text-xs sm:text-sm text-black">
-          Hand up in frame. The throw happens on one.
+          Hand up in frame. Show 1 to 6 fingers simultaneously to throw.
         </p>
       </div>
     );
   }
 
-  // 3. TOSS RESULT PHASE (Shows Bat or Bowl buttons inline without opening a dialog!)
+  // 3. TOSS RESULT PHASE
   if (match.phase === 'toss_result') {
     const isUserWinner = match.toss.winnerTeamId === match.teamA.id;
     const throwA = match.toss.teamAThrow ?? 0;
@@ -105,10 +106,10 @@ export function CommentaryCard({
     const isEven = sum % 2 === 0;
 
     return (
-      <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 text-black text-left flex-shrink-0 animate-slide-up">
+      <div className="w-full max-w-5xl mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 text-black text-left flex-shrink-0 animate-slide-up">
         <div className="flex items-center justify-between mb-1">
           <h3 className="font-display text-xl sm:text-2xl font-black uppercase tracking-tight leading-none text-black">
-            {isUserWinner ? 'YOU WON THE TOSS!' : 'COMPUTER WON THE TOSS!'}
+            {isUserWinner ? 'YOU WON THE TOSS!' : 'OPPONENT WON THE TOSS!'}
           </h3>
           <span className="font-num text-[11px] font-black bg-white px-2 py-0.5 border-2 border-black">
             {throwA} + {throwB} = {sum} ({isEven ? 'EVEN' : 'ODD'})
@@ -131,20 +132,20 @@ export function CommentaryCard({
                 onClick={() => onChooseToss?.('bowl')}
                 className="flex-1 py-2 bg-[#ff6fb5] hover:bg-[#ff5ca8] border-2 sm:border-3 border-black font-display text-xs sm:text-sm font-black text-black uppercase shadow-[2px_2px_0_0_#000] cursor-pointer"
               >
-                BOWL FIRST
+                {isBaseball ? 'PITCH FIRST' : 'BOWL FIRST'}
               </button>
             </div>
           </div>
         ) : (
           <p className="font-body text-xs text-black font-bold">
-            Computer is deciding to bat or bowl...
+            Opponent is choosing to bat or {isBaseball ? 'pitch' : 'bowl'}...
           </p>
         )}
       </div>
     );
   }
 
-  // 4. MATCH OVER PHASE (Matches Reference Image 3 & 5)
+  // 4. MATCH OVER PHASE
   if (match.phase === 'match_over') {
     const isUserWinner = match.result?.winnerTeamId === match.teamA.id;
     const isTie = match.result?.winnerTeamId === null;
@@ -159,15 +160,16 @@ export function CommentaryCard({
       scoreTeamA = match.innings2?.score ?? 0;
     }
 
+    const oppName = match.teamB.name;
     const summaryText = isTie
       ? `Match tied at ${scoreTeamA} runs!`
       : isUserWinner
-      ? `You beat Computer ${scoreTeamA} to ${scoreTeamB}.`
-      : `Computer beat You ${scoreTeamB} to ${scoreTeamA}.`;
+      ? `You beat ${oppName} ${scoreTeamA} to ${scoreTeamB}.`
+      : `${oppName} beat You ${scoreTeamB} to ${scoreTeamA}.`;
 
     return (
       <div
-        className={`w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto border-4 border-black shadow-[6px_6px_0_0_#000] p-4 sm:p-5 text-center flex-shrink-0 relative overflow-hidden animate-slide-up ${
+        className={`w-full max-w-5xl mx-auto border-4 border-black shadow-[6px_6px_0_0_#000] p-4 sm:p-5 text-center flex-shrink-0 relative overflow-hidden animate-slide-up ${
           isUserWinner
             ? 'bg-[#a3f23d] text-black'
             : isTie
@@ -190,7 +192,7 @@ export function CommentaryCard({
         {/* Tag Pill */}
         <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-black border-2 border-black font-num text-[11px] font-black uppercase shadow-[2px_2px_0_0_#000] mb-2">
           <span>{isUserWinner ? '🏆' : isTie ? '🤝' : '💀'}</span>
-          <span>{isUserWinner ? 'MATCH OVER' : isTie ? 'TIED MATCH' : 'DEFEAT'}</span>
+          <span>{isUserWinner ? 'VICTORY' : isTie ? 'TIED MATCH' : 'DEFEAT'}</span>
         </div>
 
         {/* Big Headline */}
@@ -206,7 +208,7 @@ export function CommentaryCard({
         {/* Extra commentary line */}
         {!isUserWinner && !isTie && (
           <p className="font-body text-xs font-bold text-white/90 mb-3">
-            💔 Clean bowled! Hit Play Again for revenge.
+            {isBaseball ? '⚾ Batter struck out! Hit Play Again for revenge.' : '💔 Clean bowled! Hit Play Again for revenge.'}
           </p>
         )}
         {isUserWinner && (
@@ -236,32 +238,74 @@ export function CommentaryCard({
 
   // 5. READY / WAITING FOR FIRST BALL
   if (!lastEvent) {
+    const readyRole = isBaseball
+      ? isTeamABatting ? 'READY TO BAT' : 'READY TO PITCH'
+      : isTeamABatting ? 'READY TO BAT' : 'READY TO BOWL';
+
     return (
-      <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-4 text-black text-left flex-shrink-0 animate-slide-up">
+      <div className="w-full max-w-5xl mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-4 text-black text-left flex-shrink-0 animate-slide-up">
         <h3 className="font-display text-2xl sm:text-3xl font-black uppercase tracking-tight leading-none mb-1 text-black">
-          {isTeamABatting ? 'READY TO BAT' : 'READY TO BOWL'}
+          {readyRole}
         </h3>
         <p className="font-body text-xs sm:text-sm text-black">
-          Show 1 to 6 fingers at camera to lock your throw.
+          {isBaseball
+            ? 'Show 1 to 6 fingers. Diff of 1 = Strike! 3 Strikes = Out! Equal throw = Double!'
+            : 'Show 1 to 6 fingers at camera to lock your throw.'}
         </p>
       </div>
     );
   }
 
-  // 6. LIVE EVENT RUNS COMMENTARY (Matches Reference Image 4)
-  const { isOut, runsScored, batterThrow, bowlerThrow } = lastEvent;
+  // 6. LIVE EVENT RUNS COMMENTARY
+  const { isOut, runsScored, batterThrow, bowlerThrow, isStrike, isDouble } = lastEvent;
 
+  if (isBaseball) {
+    let headline = 'BASE HIT!';
+    let detail = `Batter ${batterThrow}, Pitcher ${bowlerThrow}.`;
+    let badgeText = `+${runsScored} ON THE BOARD`;
+    let badgeColor = 'bg-white text-black';
+
+    if (isStrike) {
+      headline = isOut ? 'STRIKE 3! OUT!' : 'STRIKE!';
+      const isCirc = (batterThrow === 6 && bowlerThrow === 1) || (batterThrow === 1 && bowlerThrow === 6);
+      detail = isOut
+        ? '3 Consecutive strikes reached! Batter is OUT!'
+        : isCirc
+        ? `6 and 1 is a strike! (${batterThrow} vs ${bowlerThrow})`
+        : `Difference of 1 is a strike! (${batterThrow} vs ${bowlerThrow})`;
+      badgeText = isOut ? 'BATTER STRUCK OUT!' : 'STRIKE RECORDED!';
+      badgeColor = 'bg-[#ff3b30] text-white';
+    } else if (isDouble) {
+      headline = '🔥 DOUBLE RUNS!';
+      detail = `Equal throws (${batterThrow} = ${bowlerThrow})! 2x multiplier!`;
+      badgeText = `+${runsScored} RUNS SCORED!`;
+      badgeColor = 'bg-[#a3f23d] text-black';
+    }
+
+    return (
+      <div className="w-full max-w-5xl mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-4 text-black text-left flex-shrink-0 animate-slide-up">
+        <h3 className="font-display text-2xl sm:text-3xl font-black uppercase tracking-tight leading-none mb-1 text-black">
+          {headline}
+        </h3>
+        <p className="font-body text-xs sm:text-sm text-black mb-2.5">
+          {detail}
+        </p>
+        <div className={`inline-block border-2 sm:border-3 border-black px-3.5 py-1.5 font-num text-xs sm:text-sm font-black shadow-[2px_2px_0_0_#000] ${badgeColor}`}>
+          {badgeText}
+        </div>
+      </div>
+    );
+  }
+
+  // Cricket live commentary
   return (
-    <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-4 text-black text-left flex-shrink-0 animate-slide-up">
+    <div className="w-full max-w-5xl mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-4 text-black text-left flex-shrink-0 animate-slide-up">
       <h3 className="font-display text-2xl sm:text-3xl font-black uppercase tracking-tight leading-none mb-1 text-black">
         {isOut ? 'OUT!' : 'RUNS'}
       </h3>
-
       <p className="font-body text-xs sm:text-sm text-black mb-2.5">
         Batter {batterThrow}, bowler {bowlerThrow}.
       </p>
-
-      {/* Prominent White Box with +X ON THE BOARD (Matches Reference Image 4) */}
       <div className="inline-block bg-white text-black border-2 sm:border-3 border-black px-3.5 py-1.5 font-num text-xs sm:text-sm font-black shadow-[2px_2px_0_0_#000]">
         {isOut ? (
           <span className="text-[#ff3b30]">WICKET FALLS!</span>
