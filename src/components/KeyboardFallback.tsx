@@ -16,42 +16,47 @@ export function KeyboardFallback({
   disabled = false,
   selectedThrow = null,
 }: KeyboardFallbackProps) {
-  const throws: { val: ThrowValue; label: string; sub: string }[] = [
-    { val: 0, label: '0', sub: 'Fist' },
-    { val: 1, label: '1', sub: 'One' },
-    { val: 2, label: '2', sub: 'Peace' },
-    { val: 3, label: '3', sub: 'Three' },
-    { val: 4, label: '4', sub: 'Four' },
-    { val: 5, label: '5', sub: 'Palm' },
-    { val: 6, label: '6', sub: 'Thumb' },
+  const validThrows: { val: ThrowValue; emoji: string }[] = [
+    { val: 1, emoji: '☝️' },
+    { val: 2, emoji: '✌️' },
+    { val: 3, emoji: '🤟' },
+    { val: 4, emoji: '🖖' },
+    { val: 5, emoji: '🖐️' },
+    { val: 6, emoji: '👍' },
   ];
 
   return (
-    <div className="w-full cyber-card rounded-2xl p-3.5 border-slate-800">
-      <div className="flex items-center justify-between mb-2">
-        <span className="font-heading text-[11px] font-bold uppercase tracking-wider text-slate-300">
-          {playerLabel} Quick Controls
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="font-num text-[10px] uppercase font-bold tracking-wider text-[var(--text-muted)]">
+          {playerLabel} — Tap 1 to 6 runs
         </span>
-        <span className="font-mono text-[10px] text-slate-500">Tap or use camera</span>
+        <button
+          type="button"
+          onClick={() => onThrow(0)}
+          disabled={disabled}
+          className="font-num text-[9px] px-1.5 py-0.5 bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-muted)] hover:text-red-500"
+          title="0 triggers no-move warning (2 lives system)"
+        >
+          ✊ 0 (No Move)
+        </button>
       </div>
 
-      <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
-        {throws.map(({ val, label, sub }) => (
+      <div className="grid grid-cols-6 gap-1.5">
+        {validThrows.map(({ val, emoji }) => (
           <button
             key={val}
             type="button"
             disabled={disabled}
             onClick={() => onThrow(val)}
-            className={`cyber-btn flex flex-col items-center justify-center py-2 px-1 rounded-xl font-heading text-sm transition-all border ${
+            className={`flex flex-col items-center justify-center py-2 px-1 border-2 border-[var(--border-color)] font-num text-sm transition-all cursor-pointer ${
               selectedThrow === val
-                ? 'bg-cyan-500 text-black border-cyan-300 shadow-md shadow-cyan-500/30 scale-105'
-                : 'bg-slate-900/90 hover:bg-slate-800 text-slate-200 border-slate-700/60'
-            }`}
+                ? 'bg-[var(--accent-lime)] text-black shadow-[2px_2px_0_0_var(--shadow-color)] -translate-y-0.5'
+                : 'bg-[var(--bg-primary)] text-[var(--text-primary)] hover:bg-[var(--accent-yellow)] hover:-translate-y-0.5 shadow-[2px_2px_0_0_var(--shadow-color)]'
+            } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            <span className="text-base font-black leading-tight">{label}</span>
-            <span className="text-[9px] font-mono text-slate-400 font-normal leading-tight">
-              {sub}
-            </span>
+            <span className="text-lg leading-tight">{emoji}</span>
+            <span className="text-xs font-black leading-tight">{val}</span>
           </button>
         ))}
       </div>
