@@ -34,8 +34,9 @@ export function WebcamHandTracker({
   const [holdProgress, setHoldProgress] = useState<number>(0);
   const [confirmedValue, setConfirmedValue] = useState<ThrowValue | null>(null);
 
-  // 2-second hold time required to lock throw as requested by user
-  const stabilizerRef = useRef(new ThrowStabilizer(2000));
+  // Ref to ensure single firing per ball without blocking same repeated throw
+  const hasFiredRef = useRef(false);
+  const stabilizerRef = useRef(new ThrowStabilizer(1400));
   const animationFrameId = useRef<number | null>(null);
   const lastProcessedTime = useRef<number>(0);
 
@@ -223,6 +224,7 @@ export function WebcamHandTracker({
                 // Stabilization: 1-6 are valid moves (0 is not counted as a move)
                 if (
                   isThrowRequired &&
+                  !hasFiredRef.current &&
                   classified.fingerCount !== null &&
                   classified.fingerCount >= 1 &&
                   classified.fingerCount <= 6
@@ -230,12 +232,13 @@ export function WebcamHandTracker({
                   const stable = stabilizerRef.current.update(classified.fingerCount, Date.now());
                   setHoldProgress(stable.progress);
 
-                  if (stable.stableValue !== null && confirmedValue !== stable.stableValue) {
+                  if (stable.stableValue !== null) {
+                    hasFiredRef.current = true;
                     setConfirmedValue(stable.stableValue);
                     onThrowConfirmed(stable.stableValue);
                     stabilizerRef.current.reset();
                   }
-                } else {
+                } else if (!isThrowRequired) {
                   stabilizerRef.current.reset();
                   setHoldProgress(0);
                 }
@@ -267,10 +270,11 @@ export function WebcamHandTracker({
         cancelAnimationFrame(animationFrameId.current);
       }
     };
-  }, [landmarker, hasPermission, isThrowRequired, confirmedValue, onThrowConfirmed]);
+  }, [landmarker, hasPermission, isThrowRequired, onThrowConfirmed]);
 
   useEffect(() => {
     if (isThrowRequired) {
+      hasFiredRef.current = false;
       setConfirmedValue(null);
       stabilizerRef.current.reset();
       setHoldProgress(0);
@@ -278,7 +282,7 @@ export function WebcamHandTracker({
   }, [isThrowRequired]);
 
   return (
-    <div className="gc-tile w-full aspect-square relative border-[4px] border-black bg-black shadow-[6px_6px_0_0_#000] overflow-hidden select-none">
+    <div className="gc-tile w-full h-full relative border-3 border-black bg-black shadow-[3px_3px_0_0_#000] overflow-hidden select-none">
       {/* Video & Canvas */}
       <video
         ref={videoRef}
