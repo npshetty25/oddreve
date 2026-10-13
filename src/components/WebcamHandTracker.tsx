@@ -4,11 +4,12 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { classifyHandGesture, ThrowStabilizer, HandDetectionResult } from '@/vision/classifier';
 import { ThrowValue } from '@/engine/types';
-import { Camera, CameraOff, AlertCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 
 interface WebcamHandTrackerProps {
   playerLabel: string;
   isThrowRequired: boolean;
+  ballCycle?: number;
   onThrowConfirmed: (value: ThrowValue) => void;
   mirror?: boolean;
 }
@@ -16,6 +17,7 @@ interface WebcamHandTrackerProps {
 export function WebcamHandTracker({
   playerLabel,
   isThrowRequired,
+  ballCycle = 0,
   onThrowConfirmed,
   mirror = true,
 }: WebcamHandTrackerProps) {
@@ -24,7 +26,6 @@ export function WebcamHandTracker({
   const [landmarker, setLandmarker] = useState<HandLandmarker | null>(null);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [statusText, setStatusText] = useState<string>('Loading camera model...');
   const [detection, setDetection] = useState<HandDetectionResult>({
     detected: false,
     fingerCount: null,
@@ -34,25 +35,23 @@ export function WebcamHandTracker({
   const [holdProgress, setHoldProgress] = useState<number>(0);
   const [confirmedValue, setConfirmedValue] = useState<ThrowValue | null>(null);
 
-  // Ref to ensure single firing per ball without blocking same repeated throw
+  // References for timing, cooldown, and single fire per ball
   const hasFiredRef = useRef(false);
-  const stabilizerRef = useRef(new ThrowStabilizer(1400));
+  const stabilizerRef = useRef(new ThrowStabilizer(900));
   const animationFrameId = useRef<number | null>(null);
   const lastProcessedTime = useRef<number>(0);
+  const lastFiredTime = useRef<number>(0);
 
-  // Initialize MediaPipe Tasks Vision with local assets fallback to cdn
+  // Initialize MediaPipe Tasks Vision with local assets fallback to CDN
   useEffect(() => {
     let isCancelled = false;
 
     async function initMediaPipe() {
       try {
-        setStatusText('Loading AI model...');
-        // Try local wasm first, then fallback to CDN
         let vision;
         try {
           vision = await FilesetResolver.forVisionTasks('/wasm');
         } catch (localErr) {
-          console.warn('Local wasm fallback to cdn', localErr);
           vision = await FilesetResolver.forVisionTasks(
             'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm'
           );
@@ -60,7 +59,6 @@ export function WebcamHandTracker({
 
         if (isCancelled) return;
 
-        // Try local model task first, then cdn
         let handLandmarker: HandLandmarker;
         try {
           handLandmarker = await HandLandmarker.createFromOptions(vision, {
@@ -90,13 +88,10 @@ export function WebcamHandTracker({
 
         if (!isCancelled) {
           setLandmarker(handLandmarker);
-          setStatusText('Camera live - Show hand');
         }
       } catch (err: any) {
         console.error('HandLandmarker init error:', err);
-        setErrorMessage(
-          'Failed to initialize hand tracking vision model. You can still use the 0-6 throw buttons below.'
-        );
+        setErrorMessage('Failed to initialize hand tracking vision model.');
       }
     }
 
@@ -135,9 +130,7 @@ export function WebcamHandTracker({
       console.error('Camera access error:', err);
       setHasPermission(false);
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setErrorMessage('Camera access was denied. Please allow camera permissions in your browser or click Retry.');
-      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        setErrorMessage('No camera found on your device.');
+        setErrorMessage('Camera access was denied. Please allow camera permissions.');
       } else {
         setErrorMessage(`Camera error: ${err.message || 'Could not start camera'}`);
       }
@@ -185,19 +178,18 @@ export function WebcamHandTracker({
                 const rawLandmarks = results.landmarks[0];
                 const confidence = results.handedness?.[0]?.[0]?.score ?? 0.85;
 
-                // Draw skeleton landmarks in neo-brutalist handcricket style
-                ctx.fillStyle = '#a3f23d'; // gc-lime
+                // Draw skeleton landmarks in neo-brutalist style
+                ctx.fillStyle = '#a3f23d';
                 ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 4;
+                ctx.lineWidth = 3;
 
-                // Draw lines between connected joints
                 const connections = [
-                  [0,1],[1,2],[2,3],[3,4], // Thumb
-                  [0,5],[5,6],[6,7],[7,8], // Index
-                  [9,10],[10,11],[11,12],  // Middle
-                  [13,14],[14,15],[15,16], // Ring
-                  [0,17],[17,18],[18,19],[19,20], // Pinky
-                  [5,9],[9,13],[13,17]     // Palm
+                  [0, 1], [1, 2], [2, 3], [3, 4],
+                  [0, 5], [5, 6], [6, 7], [7, 8],
+                  [9, 10], [10, 11], [11, 12],
+                  [13, 14], [14, 15], [15, 16],
+                  [0, 17], [17, 18], [18, 19], [19, 20],
+                  [5, 9], [9, 13], [13, 17],
                 ];
 
                 ctx.beginPath();
@@ -212,7 +204,7 @@ export function WebcamHandTracker({
                 for (let i = 0; i < rawLandmarks.length; i++) {
                   const pt = rawLandmarks[i];
                   ctx.beginPath();
-                  ctx.arc(pt.x * canvas.width, pt.y * canvas.height, 5, 0, 2 * Math.PI);
+                  ctx.arc(pt.x * canvas.width, pt.y * canvas.height, 4, 0, 2 * Math.PI);
                   ctx.fill();
                   ctx.stroke();
                 }
@@ -221,10 +213,13 @@ export function WebcamHandTracker({
                 const classified = classifyHandGesture(rawLandmarks, confidence);
                 setDetection(classified);
 
-                // Stabilization: 1-6 are valid moves (0 is not counted as a move)
+                // Stabilization & Throw detection: valid throws are 1 to 6
+                const isCooldownDone = Date.now() - lastFiredTime.current > 750;
+
                 if (
                   isThrowRequired &&
                   !hasFiredRef.current &&
+                  isCooldownDone &&
                   classified.fingerCount !== null &&
                   classified.fingerCount >= 1 &&
                   classified.fingerCount <= 6
@@ -234,11 +229,12 @@ export function WebcamHandTracker({
 
                   if (stable.stableValue !== null) {
                     hasFiredRef.current = true;
+                    lastFiredTime.current = Date.now();
                     setConfirmedValue(stable.stableValue);
                     onThrowConfirmed(stable.stableValue);
                     stabilizerRef.current.reset();
                   }
-                } else if (!isThrowRequired) {
+                } else if (!isThrowRequired || !isCooldownDone) {
                   stabilizerRef.current.reset();
                   setHoldProgress(0);
                 }
@@ -254,7 +250,7 @@ export function WebcamHandTracker({
               }
             }
           } catch (e) {
-            // Processing skip
+            // Frame skip
           }
         }
       }
@@ -272,17 +268,18 @@ export function WebcamHandTracker({
     };
   }, [landmarker, hasPermission, isThrowRequired, onThrowConfirmed]);
 
+  // Clean reset when ballCycle increments or when a throw is newly required
   useEffect(() => {
-    if (isThrowRequired) {
-      hasFiredRef.current = false;
-      setConfirmedValue(null);
-      stabilizerRef.current.reset();
-      setHoldProgress(0);
-    }
-  }, [isThrowRequired]);
+    hasFiredRef.current = false;
+    setConfirmedValue(null);
+    stabilizerRef.current.reset();
+    setHoldProgress(0);
+  }, [ballCycle, isThrowRequired]);
+
+  const activeNumber = confirmedValue ?? (detection.fingerCount && detection.fingerCount >= 1 && detection.fingerCount <= 6 ? detection.fingerCount : null);
 
   return (
-    <div className="gc-tile w-full h-full relative border-3 border-black bg-black shadow-[3px_3px_0_0_#000] overflow-hidden select-none">
+    <div className="w-full h-full relative bg-black select-none overflow-hidden">
       {/* Video & Canvas */}
       <video
         ref={videoRef}
@@ -296,50 +293,40 @@ export function WebcamHandTracker({
         className={`absolute inset-0 w-full h-full pointer-events-none ${mirror ? 'mirror' : ''}`}
       />
 
-      {/* Top Left Hand Tag Badge */}
-      <div
-        className={`gc-hand ${
-          detection.detected ? 'gc-hand--ok' : 'gc-hand--none'
-        } absolute top-3 left-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full border-2 border-black font-mono text-xs font-bold shadow-[2px_2px_0_0_#000] ${
-          detection.detected ? 'bg-[#a3f23d] text-black' : 'bg-[#fff] text-black'
-        }`}
-      >
-        <span
-          className={`w-2 h-2 rounded-full border border-black ${
-            detection.detected ? 'bg-black animate-ping' : 'bg-red-500'
-          }`}
-        />
-        <span>
-          {detection.detected
-            ? `${detection.fingerCount} Runs (${detection.label})`
-            : statusText}
-        </span>
+      {/* Top Left Status Badge: "👋 SEES 2" or "✋ NO HAND" (Matches Image 1, 4, 5) */}
+      <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2.5 py-1 bg-[#ffd60a] border-2 border-black font-num text-[10px] sm:text-[11px] font-black text-black shadow-[2px_2px_0_0_#000]">
+        <span>{activeNumber !== null ? '👋' : '✋'}</span>
+        <span>{activeNumber !== null ? `SEES ${activeNumber}` : 'NO HAND'}</span>
       </div>
+
+      {/* Center Pink Circular Number Badge (Matches Image 1) - Replaces the ugly "LOCKED" badge! */}
+      {activeNumber !== null && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#ff6fb5] border-3 sm:border-4 border-black flex items-center justify-center font-display text-3xl sm:text-4xl font-black text-white shadow-[4px_4px_0_0_#000] animate-bounce-in">
+            {activeNumber}
+          </div>
+        </div>
+      )}
 
       {/* Camera Error / Permission Overlay */}
       {errorMessage && (
-        <div className="absolute inset-0 bg-[#f7f1e3] p-5 flex flex-col items-center justify-center text-center z-20 border-4 border-black">
-          <AlertCircle className="w-10 h-10 text-[#ff3b30] mb-2" />
-          <h3 className="font-display uppercase text-base text-black mb-1">Camera Needed</h3>
-          <p className="text-xs font-mono text-black max-w-xs mb-4">{errorMessage}</p>
+        <div className="absolute inset-0 bg-[#f7f1e3] p-4 flex flex-col items-center justify-center text-center z-30 border-3 border-black">
+          <AlertCircle className="w-8 h-8 text-[#ff3b30] mb-1" />
+          <p className="text-xs font-mono text-black mb-2">{errorMessage}</p>
           <button
             onClick={startCamera}
-            className="nb-btn nb-btn--lime nb-btn--sm flex items-center gap-2"
+            className="nb-btn nb-btn--lime nb-btn--sm flex items-center gap-1.5 text-xs py-1 px-2.5"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className="w-3 h-3" />
             <span>Retry Camera</span>
           </button>
         </div>
       )}
 
-      {/* Progress Hold Meter */}
+      {/* Hold Progress Meter */}
       {isThrowRequired && holdProgress > 0 && holdProgress < 1 && (
-        <div className="absolute bottom-10 left-4 right-4 z-20 bg-white border-2 border-black p-1 shadow-[3px_3px_0_0_#000]">
-          <div className="flex justify-between text-[10px] font-mono font-bold text-black uppercase mb-0.5">
-            <span>Hold throw steady: {detection.fingerCount}</span>
-            <span>{(holdProgress * 100).toFixed(0)}%</span>
-          </div>
-          <div className="w-full h-2 bg-[#f7f1e3] border border-black overflow-hidden">
+        <div className="absolute bottom-2 left-3 right-3 z-20 bg-white border-2 border-black p-0.5 shadow-[2px_2px_0_0_#000]">
+          <div className="w-full h-1.5 bg-[#f7f1e3] border border-black overflow-hidden">
             <div
               className="h-full bg-[#a3f23d]"
               style={{ width: `${holdProgress * 100}%` }}
@@ -347,21 +334,6 @@ export function WebcamHandTracker({
           </div>
         </div>
       )}
-
-      {/* Locked Throw Badge - Unobtrusive, face remains 100% visible */}
-      {confirmedValue !== null && (
-        <div className="absolute top-3 right-3 z-20 flex items-center gap-2 bg-[#a3f23d] border-3 border-black px-3 py-1.5 shadow-[3px_3px_0_0_#000] animate-bounce-in">
-          <span className="w-2.5 h-2.5 rounded-full bg-black animate-ping" />
-          <span className="font-mono text-xs uppercase font-black text-black">
-            LOCKED: {confirmedValue}
-          </span>
-        </div>
-      )}
-
-      {/* Bottom Corner Label Tag */}
-      <div className="gc-tile-tag absolute bottom-0 left-0 bg-[#ffd60a] border-t-2 border-r-2 border-black font-mono text-[10px] uppercase font-bold px-2.5 py-1 text-black">
-        {playerLabel}
-      </div>
     </div>
   );
 }

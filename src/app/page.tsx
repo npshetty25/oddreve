@@ -33,8 +33,7 @@ export default function Home() {
     opponentType,
     lastBallEvent,
     pendingThrows,
-    lives,
-    warningMessage,
+    ballCycle,
     setOpponentType,
     callToss,
     chooseToss,
@@ -484,7 +483,7 @@ export default function Home() {
   return (
     <div className="h-screen max-h-screen overflow-hidden flex flex-col justify-between bg-[var(--bg-pitch)] p-2 sm:p-3 relative select-none">
       {/* Pitch down the center */}
-      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-full max-w-xl bg-[#d4a373] dark:bg-[#583e26] border-x-4 border-black pointer-events-none z-0">
+      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] bg-[#d4a373] dark:bg-[#583e26] border-x-4 border-black pointer-events-none z-0">
         {/* Cricket Stumps at the top */}
         <div className="absolute top-1.5 left-1/2 -translate-x-1/2 flex items-center gap-1.5 opacity-80">
           <div className="w-1.5 h-5 bg-black dark:bg-white rounded-t-sm" />
@@ -494,7 +493,7 @@ export default function Home() {
       </div>
 
       {/* Top Header Bar */}
-      <header className="relative z-10 w-full flex items-center justify-between flex-shrink-0 h-8 max-w-xl mx-auto">
+      <header className="relative z-10 w-full flex items-center justify-between flex-shrink-0 h-8 max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto">
         {/* Game Mode Pill */}
         <div className="flex items-center gap-1.5 px-2.5 py-0.5 bg-[var(--accent-lime)] border-2 sm:border-3 border-black font-num text-[11px] font-black text-black shadow-[2px_2px_0_0_#000]">
           <span>{match.mode === 'cricket' ? '🏏' : '⚾'}</span>
@@ -515,25 +514,11 @@ export default function Home() {
       </header>
 
       {/* Main Gameplay Screen Area */}
-      <main className="relative z-10 flex-1 flex flex-col justify-between max-w-xl mx-auto w-full min-h-0 py-1">
-        {/* Toss Phase */}
-        {(match.phase === 'toss_call' || match.phase === 'toss_throw' || match.phase === 'toss_result') && (
-          <div className="flex-1 flex flex-col items-center justify-center">
-            <TossScreen
-              match={match}
-              onCallToss={callToss}
-              onThrowTossA={(val) => setPlayerThrow('team_a', val)}
-              onThrowTossB={(val) => setPlayerThrow('team_b', val)}
-              onChooseToss={chooseToss}
-              pendingThrows={pendingThrows}
-            />
-          </div>
-        )}
-
-        {/* Innings Break */}
+      <main className="relative z-10 flex-1 flex flex-col justify-between max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto w-full min-h-0 py-1">
+        {/* Innings Break Notification Overlay */}
         {match.phase === 'innings_break' && (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="nb-card bg-white p-5 text-center border-4 border-black max-w-sm w-full shadow-[6px_6px_0_0_#000]">
+          <div className="absolute inset-0 z-30 flex items-center justify-center p-4 bg-black/60">
+            <div className="nb-card bg-white p-5 text-center border-4 border-black max-w-sm w-full shadow-[6px_6px_0_0_#000] animate-bounce-in">
               <div className="p-3 mb-3 bg-[#ffd60a] border-3 border-black shadow-[3px_3px_0_0_#000]">
                 <h2 className="font-display text-lg text-black">
                   {match.innings1.battingTeamId === match.teamA.id
@@ -555,153 +540,139 @@ export default function Home() {
           </div>
         )}
 
-        {/* Match Result */}
-        {match.phase === 'match_over' && (
-          <div className="flex-1 flex items-center justify-center">
-            <MatchResultScreen match={match} onPlayAgain={handleBackToLanding} />
-          </div>
-        )}
+        {/* 1. Scoreboard (sits on the pitch) */}
+        <Scoreboard match={match} lastEvent={lastBallEvent} />
 
-        {/* Live Match Gameplay */}
-        {(match.phase === 'innings1' || match.phase === 'innings2') && (
-          <div className="flex-1 flex flex-col justify-between min-h-0 gap-1.5 sm:gap-2">
-            {/* 1. Scoreboard (sits on the pitch) */}
-            <Scoreboard match={match} lastEvent={lastBallEvent} lives={lives} />
-
-            {/* 2. Side-by-Side Video & Opponent Feeds */}
-            <div className="grid grid-cols-2 gap-2 w-full flex-shrink-0">
-              {/* Player 1 (You) Feed */}
-              <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[160px] sm:h-[185px]">
-                {/* Yellow window bar */}
-                <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
-                  <span className="font-num text-[10px] font-black uppercase flex items-center gap-1 truncate max-w-[120px]">
-                    <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
-                    {match.teamA.name} ({isTeamABatting ? 'BAT' : 'BOWL'})
-                  </span>
-                  {pendingThrows.teamA !== null ? (
-                    <span className="font-num text-[9px] px-1 py-0.2 bg-[#a3f23d] border border-black font-black">
-                      LOCKED
-                    </span>
-                  ) : userLastThrow !== null ? (
-                    <span className="font-num text-[9px] px-1 py-0.2 bg-white border border-black font-black">
-                      PLAYED: {userLastThrow}
-                    </span>
-                  ) : null}
-                </div>
-
-                {/* Webcam Box */}
-                <div className="relative w-full flex-1 bg-black min-h-0">
-                  <WebcamHandTracker
-                    playerLabel={match.teamA.name}
-                    isThrowRequired={pendingThrows.teamA === null}
-                    onThrowConfirmed={(val) => setPlayerThrow('team_a', val)}
-                  />
-                </div>
+        {/* 2. Side-by-Side Video & Opponent Feeds (Matches Reference Images 1, 4, 5) */}
+        <div className="grid grid-cols-2 gap-2 sm:gap-3 w-full flex-shrink-0">
+          {/* Player 1 (You) Feed */}
+          <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[180px] sm:h-[210px]">
+            {/* Yellow window bar */}
+            <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2.5 py-1 flex items-center justify-between text-black flex-shrink-0">
+              <div className="flex items-center gap-1.5 font-num text-[11px] sm:text-xs font-black uppercase truncate max-w-[140px]">
+                <span className="w-2.5 h-2.5 rounded-full border border-black bg-white inline-block flex-shrink-0" />
+                <span>{match.teamA.name === 'Team A' ? 'YOU' : match.teamA.name}</span>
+                {match.phase === 'innings1' || match.phase === 'innings2' ? (
+                  <span className="opacity-75">({isTeamABatting ? 'BAT' : 'BOWL'})</span>
+                ) : null}
               </div>
-
-              {/* Player 2 (Opponent) Feed */}
-              <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[160px] sm:h-[185px]">
-                {/* Pink window bar */}
-                <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
-                  <span className="font-num text-[10px] font-black uppercase flex items-center gap-1 truncate max-w-[120px]">
-                    <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
-                    {match.teamB.name} ({!isTeamABatting ? 'BAT' : 'BOWL'})
-                  </span>
-                  {pendingThrows.teamB !== null ? (
-                    <span className="font-num text-[9px] px-1 py-0.2 bg-[#a3f23d] border border-black font-black">
-                      READY
-                    </span>
-                  ) : oppLastThrow !== null ? (
-                    <span className="font-num text-[9px] px-1 py-0.2 bg-white border border-black font-black">
-                      PLAYED: {oppLastThrow}
-                    </span>
-                  ) : null}
-                </div>
-
-                {/* Opponent Display Box - CLEAR OPPONENT MOVE DISPLAY */}
-                {opponentType === 'computer' ? (
-                  <div className="relative w-full flex-1 bg-[#3b82f6] border-2 border-black flex flex-col items-center justify-center p-2 text-white min-h-0 select-none">
-                    {oppLastThrow !== null ? (
-                      <div className="flex flex-col items-center justify-center">
-                        <div className="font-display text-5xl sm:text-6xl font-black text-white leading-none">
-                          {oppLastThrow}
-                        </div>
-                        <div className="font-num text-[10px] font-black uppercase text-white/90 mt-1 bg-black/40 px-2 py-0.5 border border-white/20">
-                          {match.teamB.name} THREW {oppLastThrow}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center">
-                        <div className="text-3xl mb-1">🤖</div>
-                        <div className="font-num text-xs font-bold uppercase opacity-90">
-                          {match.teamB.name} Ready
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="relative w-full flex-1 bg-[#f472b6] border-2 border-black flex flex-col items-center justify-center p-2 text-black min-h-0 select-none">
-                    {oppLastThrow !== null ? (
-                      <div className="flex flex-col items-center justify-center">
-                        <div className="font-display text-5xl sm:text-6xl font-black text-black leading-none">
-                          {oppLastThrow}
-                        </div>
-                        <div className="font-num text-[10px] font-black uppercase text-black/90 mt-1 bg-white/60 px-2 py-0.5 border border-black">
-                          {match.teamB.name} THREW {oppLastThrow}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center">
-                        <div className="text-3xl mb-1">👤</div>
-                        <div className="font-num text-xs font-bold uppercase">
-                          Waiting for Friend
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+              {pendingThrows.teamA !== null ? (
+                <span className="font-num text-[9px] px-1.5 py-0.5 bg-[#a3f23d] border border-black font-black">
+                  READY
+                </span>
+              ) : null}
             </div>
 
-            {/* 3. Commentary Card (placed right below the video feeds) */}
-            <CommentaryCard
-              lastEvent={lastBallEvent}
-              mode={match.mode}
-              warningMessage={warningMessage}
-            />
+            {/* Webcam Box */}
+            <div className="relative w-full flex-1 bg-black min-h-0 overflow-hidden">
+              <WebcamHandTracker
+                playerLabel={match.teamA.name}
+                isThrowRequired={
+                  match.phase === 'toss_throw' ||
+                  ((match.phase === 'innings1' || match.phase === 'innings2') && pendingThrows.teamA === null)
+                }
+                ballCycle={ballCycle}
+                onThrowConfirmed={(val) => setPlayerThrow('team_a', val)}
+              />
+            </div>
+          </div>
 
-            {/* 4. Touch Keyboard Toggle Drawer */}
-            <div className="relative flex justify-end flex-shrink-0">
-              <button
-                onClick={() => setShowTouchKeyboard(!showTouchKeyboard)}
-                className="bg-white hover:bg-[#ffd60a] border-2 border-black px-2 py-0.5 font-num text-[10px] font-bold text-black shadow-[2px_2px_0_0_#000] flex items-center gap-1.5 cursor-pointer"
+          {/* Player 2 (Computer / Opponent) Feed (Matches Reference Images 1, 4, 5) */}
+          <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[180px] sm:h-[210px]">
+            {/* Pink window bar with O O O COMPUTER */}
+            <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2.5 py-1 flex items-center justify-between text-black flex-shrink-0">
+              <div className="flex items-center gap-1.5 font-num text-[11px] sm:text-xs font-black uppercase truncate max-w-[140px]">
+                <div className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
+                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
+                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
+                </div>
+                <span>{match.teamB.name.toUpperCase()}</span>
+                {match.phase === 'innings1' || match.phase === 'innings2' ? (
+                  <span className="opacity-75">({!isTeamABatting ? 'BAT' : 'BOWL'})</span>
+                ) : null}
+              </div>
+              {pendingThrows.teamB !== null ? (
+                <span className="font-num text-[9px] px-1.5 py-0.5 bg-[#a3f23d] border border-black font-black">
+                  READY
+                </span>
+              ) : null}
+            </div>
+
+            {/* Solid Blue Card with White Retro SVG Robot & Move Display (Matches Reference Images 4, 5) */}
+            <div className="relative w-full flex-1 bg-[#2563eb] border-2 border-black flex flex-col items-center justify-center p-2 text-white min-h-0 select-none overflow-hidden">
+              {/* Retro Robot SVG Icon */}
+              <svg
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                className="w-12 h-12 sm:w-14 sm:h-14 text-white drop-shadow-[2px_2px_0_#000]"
               >
-                <Keyboard className="w-3 h-3" />
-                <span>{showTouchKeyboard ? 'Hide keypad' : 'Touch keypad'}</span>
+                <rect x="11" y="1" width="2" height="3" rx="1" />
+                <circle cx="12" cy="1" r="1.5" />
+                <rect x="4" y="4" width="16" height="10" rx="2" />
+                <rect x="7" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
+                <rect x="14" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
+                <rect x="9" y="11" width="6" height="1.5" rx="0.5" fill="#2563eb" />
+                <rect x="2" y="7" width="2" height="4" rx="1" />
+                <rect x="20" y="7" width="2" height="4" rx="1" />
+                <path d="M5 15h14v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5z" />
+                <rect x="2" y="16" width="2" height="4" rx="1" />
+                <rect x="20" y="16" width="2" height="4" rx="1" />
+              </svg>
+
+              {/* Move Number Display Below Robot */}
+              {oppLastThrow !== null || match.phase === 'match_over' ? (
+                <div className="font-display text-4xl sm:text-5xl font-black text-white leading-none mt-1 animate-bounce-in">
+                  {oppLastThrow !== null ? oppLastThrow : 0}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Commentary Card (Unified Toss, Commentary, and Match Over - Matches Reference Images 1, 4, 5) */}
+        <CommentaryCard
+          match={match}
+          lastEvent={lastBallEvent}
+          onCallToss={callToss}
+          onChooseToss={chooseToss}
+          onPlayAgain={() => {
+            resetMatch();
+            initMatch({ mode: match.mode, format: match.format, opponentType });
+          }}
+          onBackToLanding={handleBackToLanding}
+        />
+
+        {/* 4. Touch Keyboard Toggle Drawer */}
+        <div className="relative flex justify-end flex-shrink-0">
+          <button
+            onClick={() => setShowTouchKeyboard(!showTouchKeyboard)}
+            className="bg-white hover:bg-[#ffd60a] border-2 border-black px-2 py-0.5 font-num text-[10px] font-bold text-black shadow-[2px_2px_0_0_#000] flex items-center gap-1.5 cursor-pointer"
+          >
+            <Keyboard className="w-3 h-3" />
+            <span>{showTouchKeyboard ? 'Hide keypad' : 'Touch keypad'}</span>
+          </button>
+        </div>
+
+        {/* Pop-up Overlay Keyboard Fallback so it NEVER pushes layout */}
+        {showTouchKeyboard && (
+          <div className="fixed bottom-12 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-3 border-black p-2.5 shadow-[6px_6px_0_0_#000] z-50 animate-slide-up">
+            <div className="flex justify-between items-center mb-1">
+              <span className="font-num text-[10px] font-black uppercase text-black">
+                TOUCH KEYPAD CONTROLS
+              </span>
+              <button onClick={() => setShowTouchKeyboard(false)} className="text-black font-black">
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
-
-            {/* Pop-up Overlay Keyboard Fallback so it NEVER pushes layout */}
-            {showTouchKeyboard && (
-              <div className="fixed bottom-12 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-3 border-black p-2.5 shadow-[6px_6px_0_0_#000] z-50 animate-slide-up">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-num text-[10px] font-black uppercase text-black">
-                    TOUCH KEYPAD CONTROLS
-                  </span>
-                  <button onClick={() => setShowTouchKeyboard(false)} className="text-black font-black">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <KeyboardFallback
-                  playerLabel={match.teamA.name}
-                  selectedThrow={pendingThrows.teamA}
-                  onThrow={(val) => {
-                    setPlayerThrow('team_a', val);
-                    setShowTouchKeyboard(false);
-                  }}
-                />
-              </div>
-            )}
+            <KeyboardFallback
+              playerLabel={match.teamA.name}
+              selectedThrow={pendingThrows.teamA}
+              onThrow={(val) => {
+                setPlayerThrow('team_a', val);
+                setShowTouchKeyboard(false);
+              }}
+            />
           </div>
         )}
       </main>
@@ -748,8 +719,8 @@ function HowToPlayModal({ onClose }: { onClose: () => void }) {
                 </div>
               ))}
             </div>
-            <p className="font-num text-[10px] text-[#ff3b30] mt-1.5">
-              * Note: 0 (fist) is not a run throw. If no move is shown, you get a warning (2 lives limit).
+            <p className="font-num text-[10px] text-[#666] mt-1.5">
+              * Note: Valid run throws are 1 to 6 fingers.
             </p>
           </div>
 

@@ -25,17 +25,11 @@ interface GameStore {
   match: MatchState;
   opponentType: OpponentType;
   lastBallEvent: BallEvent | null;
-  // Temporary staging for pending local player throws in UI
+  ballCycle: number;
   pendingThrows: {
     teamA: ThrowValue | null;
     teamB: ThrowValue | null;
   };
-  // Player lives for warning system (2 lives each, 0 is not a move)
-  lives: {
-    teamA: number;
-    teamB: number;
-  };
-  warningMessage: string | null;
 
   // Actions
   initMatch: (params?: {
@@ -54,14 +48,12 @@ interface GameStore {
   callToss: (callerTeamId: string, call: TossCall) => void;
   chooseToss: (choice: TossChoice) => void;
   setPlayerThrow: (teamId: 'team_a' | 'team_b', value: ThrowValue) => void;
-  triggerNoMoveWarning: (teamId: 'team_a' | 'team_b') => void;
-  clearWarning: () => void;
   submitPendingThrows: () => void;
   startSecondInnings: () => void;
   resetMatch: () => void;
 }
 
-// In ODDOREVE, valid moves are 1 to 6 (0 is not counted as a move)
+// In ODDOREVE, valid moves are 1 to 6
 function getRandomThrow(): ThrowValue {
   return (Math.floor(Math.random() * 6) + 1) as ThrowValue;
 }
@@ -75,15 +67,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
   }),
   opponentType: 'computer',
   lastBallEvent: null,
+  ballCycle: 0,
   pendingThrows: {
     teamA: null,
     teamB: null,
   },
-  lives: {
-    teamA: 2,
-    teamB: 2,
-  },
-  warningMessage: null,
 
   initMatch: (params) => {
     const opp = params?.opponentType ?? get().opponentType;
@@ -95,9 +83,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         teamBName: params?.teamBName ?? (opp === 'computer' ? 'Computer' : 'Friend'),
       }),
       lastBallEvent: null,
+      ballCycle: 0,
       pendingThrows: { teamA: null, teamB: null },
-      lives: { teamA: 2, teamB: 2 },
-      warningMessage: null,
     });
   },
 
@@ -112,9 +99,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         teamBName: match.teamB.name,
       }),
       lastBallEvent: null,
+      ballCycle: 0,
       pendingThrows: { teamA: null, teamB: null },
-      lives: { teamA: 2, teamB: 2 },
-      warningMessage: null,
     });
   },
 
@@ -128,9 +114,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         teamBName: match.teamB.name,
       }),
       lastBallEvent: null,
+      ballCycle: 0,
       pendingThrows: { teamA: null, teamB: null },
-      lives: { teamA: 2, teamB: 2 },
-      warningMessage: null,
     });
   },
 
@@ -144,167 +129,130 @@ export const useGameStore = create<GameStore>((set, get) => ({
         teamBName: opponentType === 'computer' ? 'Computer' : 'Friend',
       }),
       lastBallEvent: null,
+      ballCycle: 0,
       pendingThrows: { teamA: null, teamB: null },
-      lives: { teamA: 2, teamB: 2 },
-      warningMessage: null,
     });
   },
 
   callToss: (callerTeamId, call) => {
-    const { match, opponentType } = get();
+    const { match } = get();
     const nextState = setTossCall(match, callerTeamId, call);
-    set({ match: nextState, warningMessage: null });
-
-    // If opponent is computer, automatically prepare computer's toss throw (1-6)
-    if (opponentType === 'computer') {
-      const compThrow = getRandomThrow();
-      set((state) => ({
-        pendingThrows: {
-          ...state.pendingThrows,
-          teamB: compThrow,
-        },
-      }));
-    }
+    // DO NOT pre-generate or leak computer's throw! It is thrown simultaneously on throw step.
+    set({
+      match: nextState,
+      pendingThrows: { teamA: null, teamB: null },
+      ballCycle: get().ballCycle + 1,
+    });
   },
 
   chooseToss: (choice) => {
     const { match } = get();
-    set({ match: selectTossChoice(match, choice), warningMessage: null });
+    const nextState = selectTossChoice(match, choice);
+    set({
+      match: nextState,
+      pendingThrows: { teamA: null, teamB: null },
+      ballCycle: get().ballCycle + 1,
+    });
+  },
 
-    // If computer won toss and must choose
-    if (get().opponentType === 'computer' && get().match.phase === 'innings1') {
-      const compThrow = getRandomThrow();
-      set((state) => ({
-        pendingThrows: {
-          ...state.pendingThrows,
-          teamB: compThrow,
-        },
-      }));
+  setPlayerThrow: (teamId, value) => {
+    // 0 is fist / idle; valid cricket moves are 1 to 6
+    if (value < 1 || value > 6) return;
+
+    const { match, opponentType } = get();
+
+    // 1. TOSS THROW FLOW
+    if (match.phase === 'toss_throw') {
+      if (opponentType === 'computer' && teamId === 'team_a') {
+        const compThrow = getRandomThrow();
+        const nextState = resolveTossThrows(match, value, compThrow);
+
+        // If computer won toss, computer auto-picks bat or bowl after short delay
+        if (nextState.toss.winnerTeamId === match.teamB.id) {
+          const compChoice: TossChoice = Math.random() > 0.5 ? 'bat' : 'bowl';
+          const chosenState = selectTossChoice(nextState, compChoice);
+          set({
+            match: chosenState,
+            pendingThrows: { teamA: null, teamB: null },
+            ballCycle: get().ballCycle + 1,
+          });
+        } else {
+          set({
+            match: nextState,
+            pendingThrows: { teamA: null, teamB: null },
+            ballCycle: get().ballCycle + 1,
+          });
+        }
+      } else {
+        // Human vs Human toss
+        let currentPending = { ...get().pendingThrows };
+        currentPending[teamId === 'team_a' ? 'teamA' : 'teamB'] = value;
+        set({ pendingThrows: currentPending });
+
+        if (currentPending.teamA !== null && currentPending.teamB !== null) {
+          const nextState = resolveTossThrows(match, currentPending.teamA, currentPending.teamB);
+          set({
+            match: nextState,
+            pendingThrows: { teamA: null, teamB: null },
+            ballCycle: get().ballCycle + 1,
+          });
+        }
+      }
+      return;
     }
-  },
 
-  clearWarning: () => {
-    set({ warningMessage: null });
-  },
+    // 2. LIVE GAMEPLAY (INNINGS 1 OR 2)
+    if (match.phase === 'innings1' || match.phase === 'innings2') {
+      let currentPending = { ...get().pendingThrows };
+      currentPending[teamId === 'team_a' ? 'teamA' : 'teamB'] = value;
 
-  triggerNoMoveWarning: (teamId) => {
-    const { match, lives } = get();
-    const teamKey = teamId === 'team_a' ? 'teamA' : 'teamB';
-    const teamName = teamId === 'team_a' ? match.teamA.name : match.teamB.name;
-    const currentLives = lives[teamKey];
-    const newLives = Math.max(0, currentLives - 1);
+      if (opponentType === 'computer' && teamId === 'team_a') {
+        const compThrow = getRandomThrow();
+        currentPending.teamB = compThrow;
 
-    const nextLives = { ...lives, [teamKey]: newLives };
-
-    if (newLives > 0) {
-      set({
-        lives: nextLives,
-        warningMessage: `⚠️ WARNING for ${teamName}: 0 is not a move! Show 1 to 6. (${newLives} life left)`,
-      });
-    } else {
-      // Out of lives! Apply penalty
-      const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
-      const isBatting = currentInnings?.battingTeamId === (teamId === 'team_a' ? match.teamA.id : match.teamB.id);
-
-      if (isBatting && (match.phase === 'innings1' || match.phase === 'innings2')) {
-        // Batter dismissed for time wasting / no move violations
-        // Resolve with equal throws to trigger OUT
-        const { nextState, event } = playBall(match, 1, 1);
+        const { nextState, event } = playBall(match, value, compThrow);
         set({
           match: nextState,
-          lastBallEvent: {
-            ...event,
-            description: `OUT! ${teamName} ran out of lives (2 warnings for no move)!`,
-          },
-          lives: { ...nextLives, [teamKey]: 2 }, // Reset lives for next batter
-          warningMessage: `🚨 OUT! ${teamName} forfeited wicket after running out of lives!`,
+          lastBallEvent: event,
           pendingThrows: { teamA: null, teamB: null },
+          ballCycle: get().ballCycle + 1,
         });
-      } else {
-        set({
-          lives: { ...nextLives, [teamKey]: 2 },
-          warningMessage: `🚨 PENALTY! ${teamName} ran out of lives!`,
-        });
+        return;
+      }
+
+      set({ pendingThrows: currentPending });
+      if (currentPending.teamA !== null && currentPending.teamB !== null) {
+        get().submitPendingThrows();
       }
     }
   },
 
-  setPlayerThrow: (teamId, value) => {
-    // 0 is not counted as a move. If a player submits 0, trigger warning with 2 lives!
-    if (value === 0) {
-      get().triggerNoMoveWarning(teamId);
-      return;
-    }
-
-    const { opponentType } = get();
-    let currentPending = { ...get().pendingThrows };
-
-    currentPending[teamId === 'team_a' ? 'teamA' : 'teamB'] = value;
-
-    // If playing computer and human just made throw for Team A, computer throws randomly (1-6)
-    if (opponentType === 'computer' && teamId === 'team_a' && currentPending.teamB === null) {
-      currentPending.teamB = getRandomThrow();
-    }
-
-    set({ pendingThrows: currentPending, warningMessage: null });
-
-    // Auto submit if both throws are set!
-    if (currentPending.teamA !== null && currentPending.teamB !== null) {
-      get().submitPendingThrows();
-    }
-  },
-
   submitPendingThrows: () => {
-    const { match, pendingThrows, opponentType } = get();
+    const { match, pendingThrows } = get();
     if (pendingThrows.teamA === null || pendingThrows.teamB === null) return;
 
     const throwA = pendingThrows.teamA;
     const throwB = pendingThrows.teamB;
 
-    if (match.phase === 'toss_throw') {
-      const nextState = resolveTossThrows(match, throwA, throwB);
-      // If computer won toss, computer auto-picks bat or bowl
-      if (opponentType === 'computer' && nextState.toss.winnerTeamId === 'team_b') {
-        const compChoice: TossChoice = Math.random() > 0.5 ? 'bat' : 'bowl';
-        const afterChoice = selectTossChoice(nextState, compChoice);
-        set({
-          match: afterChoice,
-          pendingThrows: {
-            teamA: null,
-            teamB: getRandomThrow(),
-          },
-        });
-      } else {
-        set({
-          match: nextState,
-          pendingThrows: { teamA: null, teamB: null },
-        });
-      }
-    } else if (match.phase === 'innings1' || match.phase === 'innings2') {
+    if (match.phase === 'innings1' || match.phase === 'innings2') {
       const { nextState, event } = playBall(match, throwA, throwB);
       set({
         match: nextState,
         lastBallEvent: event,
-        pendingThrows: {
-          teamA: null,
-          teamB: opponentType === 'computer' && !nextState.innings1.isCompleted ? getRandomThrow() : null,
-        },
+        pendingThrows: { teamA: null, teamB: null },
+        ballCycle: get().ballCycle + 1,
       });
     }
   },
 
   startSecondInnings: () => {
-    const { match, opponentType } = get();
+    const { match } = get();
     const nextState = startInnings2(match);
     set({
       match: nextState,
       lastBallEvent: null,
-      lives: { teamA: 2, teamB: 2 },
-      warningMessage: null,
-      pendingThrows: {
-        teamA: null,
-        teamB: opponentType === 'computer' ? getRandomThrow() : null,
-      },
+      pendingThrows: { teamA: null, teamB: null },
+      ballCycle: get().ballCycle + 1,
     });
   },
 
@@ -319,9 +267,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
         teamBName: match.teamB.name,
       }),
       lastBallEvent: null,
+      ballCycle: 0,
       pendingThrows: { teamA: null, teamB: null },
-      lives: { teamA: 2, teamB: 2 },
-      warningMessage: null,
     });
   },
 }));
