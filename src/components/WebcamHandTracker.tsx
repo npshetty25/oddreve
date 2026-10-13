@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { classifyHandGesture, ThrowStabilizer, HandDetectionResult } from '@/vision/classifier';
 import { ThrowValue } from '@/engine/types';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
 
 interface WebcamHandTrackerProps {
   playerLabel: string;
@@ -24,6 +24,7 @@ export function WebcamHandTracker({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [landmarker, setLandmarker] = useState<HandLandmarker | null>(null);
+  const [isModelLoading, setIsModelLoading] = useState(true);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [detection, setDetection] = useState<HandDetectionResult>({
@@ -37,60 +38,78 @@ export function WebcamHandTracker({
 
   // References for timing, cooldown, and single fire per ball
   const hasFiredRef = useRef(false);
-  const stabilizerRef = useRef(new ThrowStabilizer(900));
+  // Responsive hold duration: 400ms for quick and natural recognition
+  const stabilizerRef = useRef(new ThrowStabilizer(400));
   const animationFrameId = useRef<number | null>(null);
   const lastProcessedTime = useRef<number>(0);
   const lastFiredTime = useRef<number>(0);
 
-  // Initialize MediaPipe Tasks Vision with local assets fallback to CDN
+  // Initialize MediaPipe Tasks Vision with robust multi-tiered fallback
   useEffect(() => {
     let isCancelled = false;
 
     async function initMediaPipe() {
+      setIsModelLoading(true);
       try {
         let vision;
+        const cdnWasmUrl = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/wasm';
+
         try {
-          vision = await FilesetResolver.forVisionTasks('/wasm');
-        } catch (localErr) {
-          vision = await FilesetResolver.forVisionTasks(
-            'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm'
-          );
+          vision = await FilesetResolver.forVisionTasks(cdnWasmUrl);
+        } catch {
+          try {
+            vision = await FilesetResolver.forVisionTasks('/wasm');
+          } catch {
+            vision = await FilesetResolver.forVisionTasks(
+              'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+            );
+          }
         }
 
         if (isCancelled) return;
 
-        let handLandmarker: HandLandmarker;
-        try {
-          handLandmarker = await HandLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath: '/models/hand_landmarker.task',
-              delegate: 'GPU',
-            },
-            runningMode: 'VIDEO',
-            numHands: 1,
-            minHandDetectionConfidence: 0.4,
-            minHandPresenceConfidence: 0.4,
-            minTrackingConfidence: 0.4,
-          });
-        } catch (modelErr) {
-          handLandmarker = await HandLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath:
-                'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-            },
-            runningMode: 'VIDEO',
-            numHands: 1,
-            minHandDetectionConfidence: 0.4,
-            minHandPresenceConfidence: 0.4,
-            minTrackingConfidence: 0.4,
-          });
+        const remoteModelUrl =
+          'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+        let handLandmarker: HandLandmarker | null = null;
+
+        // Try CPU first or GPU with graceful fallback
+        const delegates: ('GPU' | 'CPU')[] = ['GPU', 'CPU'];
+        const modelPaths = ['/models/hand_landmarker.task', remoteModelUrl];
+
+        for (const modelPath of modelPaths) {
+          if (handLandmarker) break;
+          for (const delegate of delegates) {
+            try {
+              handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                  modelAssetPath: modelPath,
+                  delegate,
+                },
+                runningMode: 'VIDEO',
+                numHands: 1,
+                minHandDetectionConfidence: 0.35,
+                minHandPresenceConfidence: 0.35,
+                minTrackingConfidence: 0.35,
+              });
+              if (handLandmarker) break;
+            } catch (createErr) {
+              // Try next option
+            }
+          }
         }
 
-        if (!isCancelled) {
+        if (isCancelled) return;
+
+        if (handLandmarker) {
           setLandmarker(handLandmarker);
+          setIsModelLoading(false);
+        } else {
+          throw new Error('Could not load HandLandmarker model');
         }
       } catch (err: any) {
         console.error('HandLandmarker init error:', err);
+        setIsModelLoading(false);
         setErrorMessage('Failed to initialize hand tracking vision model.');
       }
     }
@@ -214,7 +233,7 @@ export function WebcamHandTracker({
                 setDetection(classified);
 
                 // Stabilization & Throw detection: valid throws are 1 to 6
-                const isCooldownDone = Date.now() - lastFiredTime.current > 750;
+                const isCooldownDone = Date.now() - lastFiredTime.current > 500;
 
                 if (
                   isThrowRequired &&
@@ -293,13 +312,22 @@ export function WebcamHandTracker({
         className={`absolute inset-0 w-full h-full pointer-events-none ${mirror ? 'mirror' : ''}`}
       />
 
-      {/* Top Left Status Badge: "👋 SEES 2" or "✋ NO HAND" (Matches Image 1, 4, 5) */}
+      {/* Top Left Status Badge: "👋 SEES 2" or "✋ NO HAND" or loading */}
       <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2.5 py-1 bg-[#ffd60a] border-2 border-black font-num text-[10px] sm:text-[11px] font-black text-black shadow-[2px_2px_0_0_#000]">
-        <span>{activeNumber !== null ? '👋' : '✋'}</span>
-        <span>{activeNumber !== null ? `SEES ${activeNumber}` : 'NO HAND'}</span>
+        {isModelLoading ? (
+          <>
+            <Loader2 className="w-3 h-3 animate-spin" />
+            <span>AI LOADING...</span>
+          </>
+        ) : (
+          <>
+            <span>{activeNumber !== null ? '👋' : '✋'}</span>
+            <span>{activeNumber !== null ? `SEES ${activeNumber}` : 'NO HAND'}</span>
+          </>
+        )}
       </div>
 
-      {/* Center Pink Circular Number Badge (Matches Image 1) - Replaces the ugly "LOCKED" badge! */}
+      {/* Center Pink Circular Number Badge */}
       {activeNumber !== null && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
           <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#ff6fb5] border-3 sm:border-4 border-black flex items-center justify-center font-display text-3xl sm:text-4xl font-black text-white shadow-[4px_4px_0_0_#000] animate-bounce-in">
