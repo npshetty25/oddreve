@@ -20,6 +20,8 @@ export function CommentaryCard({
   onPlayAgain,
   onBackToLanding,
 }: CommentaryCardProps) {
+  if (!match) return null;
+
   const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
   const isTeamABatting = currentInnings?.battingTeamId === match.teamA.id;
 

@@ -10,6 +10,7 @@ interface ScoreboardProps {
 }
 
 export function Scoreboard({ match, lastEvent }: ScoreboardProps) {
+  if (!match) return null;
   const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
   const isTeamABatting = currentInnings?.battingTeamId === match.teamA.id;
   const isSecondInnings = match.phase === 'innings2';
