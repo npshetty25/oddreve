@@ -1,6 +1,7 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
+import confetti from 'canvas-confetti';
 import { MatchState, BallEvent, TossCall, TossChoice } from '@/engine/types';
 
 interface CommentaryCardProps {
@@ -24,6 +25,34 @@ export function CommentaryCard({
 
   const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
   const isTeamABatting = currentInnings?.battingTeamId === match.teamA.id;
+  const isUserWinner = match.phase === 'match_over' && match.result?.winnerTeamId === match.teamA.id;
+
+  // Real canvas-confetti celebration when you win!
+  useEffect(() => {
+    if (isUserWinner) {
+      confetti({
+        particleCount: 120,
+        spread: 80,
+        origin: { y: 0.6 },
+        colors: ['#a3f23d', '#ffd60a', '#ff6fb5', '#3b82f6', '#ffffff'],
+      });
+      const timer = setTimeout(() => {
+        confetti({
+          particleCount: 70,
+          angle: 60,
+          spread: 60,
+          origin: { x: 0.05, y: 0.7 },
+        });
+        confetti({
+          particleCount: 70,
+          angle: 120,
+          spread: 60,
+          origin: { x: 0.95, y: 0.7 },
+        });
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [isUserWinner]);
 
   // 1. TOSS CALL PHASE
   if (match.phase === 'toss_call') {
@@ -115,7 +144,7 @@ export function CommentaryCard({
     );
   }
 
-  // 4. MATCH OVER PHASE (Matches Reference Image 5)
+  // 4. MATCH OVER PHASE (Matches Reference Image 3 & 5)
   if (match.phase === 'match_over') {
     const isUserWinner = match.result?.winnerTeamId === match.teamA.id;
     const isTie = match.result?.winnerTeamId === null;
@@ -137,38 +166,66 @@ export function CommentaryCard({
       : `Computer beat You ${scoreTeamB} to ${scoreTeamA}.`;
 
     return (
-      <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#a3f23d] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 sm:p-4 text-black text-center flex-shrink-0 relative overflow-hidden animate-slide-up">
-        {/* Confetti decoration */}
-        <div className="absolute top-1 left-2 w-3 h-2 bg-[#ffd60a] border border-black rotate-12" />
-        <div className="absolute top-2 left-6 w-2 h-3 bg-[#ff6fb5] border border-black -rotate-45" />
-        <div className="absolute top-1 right-3 w-3 h-2 bg-[#3b82f6] border border-black rotate-45" />
-        <div className="absolute top-3 right-8 w-2 h-3 bg-[#ffd60a] border border-black -rotate-12" />
-        <div className="absolute bottom-2 left-4 w-2 h-3 bg-[#3b82f6] border border-black rotate-45" />
-        <div className="absolute bottom-1 right-5 w-3 h-2 bg-[#ff6fb5] border border-black -rotate-12" />
+      <div
+        className={`w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto border-4 border-black shadow-[6px_6px_0_0_#000] p-4 sm:p-5 text-center flex-shrink-0 relative overflow-hidden animate-slide-up ${
+          isUserWinner
+            ? 'bg-[#a3f23d] text-black'
+            : isTie
+            ? 'bg-[#ffd60a] text-black'
+            : 'bg-[#ff3b30] text-white animate-shake'
+        }`}
+      >
+        {/* Confetti decoration for Winner */}
+        {isUserWinner && (
+          <>
+            <div className="absolute top-1 left-2 w-3 h-2 bg-[#ffd60a] border border-black rotate-12 animate-ping" />
+            <div className="absolute top-2 left-8 w-2 h-3 bg-[#ff6fb5] border border-black -rotate-45" />
+            <div className="absolute top-1 right-3 w-3 h-2 bg-[#3b82f6] border border-black rotate-45" />
+            <div className="absolute top-3 right-8 w-2 h-3 bg-[#ffd60a] border border-black -rotate-12 animate-bounce" />
+            <div className="absolute bottom-2 left-4 w-2 h-3 bg-[#3b82f6] border border-black rotate-45" />
+            <div className="absolute bottom-1 right-5 w-3 h-2 bg-[#ff6fb5] border border-black -rotate-12" />
+          </>
+        )}
 
-        <div className="inline-flex items-center gap-1.5 px-3 py-0.5 bg-white border-2 border-black font-num text-[10px] sm:text-[11px] font-black uppercase shadow-[2px_2px_0_0_#000] mb-1.5">
-          <span>🏆</span>
-          <span>MATCH OVER</span>
+        {/* Tag Pill */}
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-white text-black border-2 border-black font-num text-[11px] font-black uppercase shadow-[2px_2px_0_0_#000] mb-2">
+          <span>{isUserWinner ? '🏆' : isTie ? '🤝' : '💀'}</span>
+          <span>{isUserWinner ? 'MATCH OVER' : isTie ? 'TIED MATCH' : 'DEFEAT'}</span>
         </div>
 
-        <h2 className="font-display text-3xl sm:text-4xl font-black uppercase tracking-tight leading-none text-black mb-1">
+        {/* Big Headline */}
+        <h2 className="font-display text-4xl sm:text-5xl font-black uppercase tracking-tight leading-none mb-1 drop-shadow-[2px_2px_0_#000]">
           {isUserWinner ? 'YOU WON!' : isTie ? 'MATCH TIED!' : 'YOU LOST!'}
         </h2>
 
-        <p className="font-num text-xs sm:text-sm font-bold text-black mb-3">
+        {/* Subtitle */}
+        <p className="font-num text-sm sm:text-base font-bold mb-1 opacity-95">
           {summaryText}
         </p>
 
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-2 max-w-xs sm:max-w-sm mx-auto">
+        {/* Extra commentary line */}
+        {!isUserWinner && !isTie && (
+          <p className="font-body text-xs font-bold text-white/90 mb-3">
+            💔 Clean bowled! Hit Play Again for revenge.
+          </p>
+        )}
+        {isUserWinner && (
+          <p className="font-body text-xs font-bold text-black/90 mb-3">
+            🎉 Brilliant performance! Champion of the pitch!
+          </p>
+        )}
+
+        {/* Action Buttons */}
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 max-w-xs sm:max-w-sm mx-auto mt-2">
           <button
             onClick={onPlayAgain}
-            className="w-full py-2 bg-black hover:bg-neutral-800 text-white border-2 sm:border-3 border-black font-display text-xs sm:text-sm font-black uppercase shadow-[3px_3px_0_0_#000] cursor-pointer"
+            className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white border-3 border-black font-display text-xs sm:text-sm font-black uppercase shadow-[3px_3px_0_0_#000] cursor-pointer"
           >
             PLAY AGAIN
           </button>
           <button
             onClick={onBackToLanding}
-            className="w-full py-2 bg-white hover:bg-neutral-100 text-black border-2 sm:border-3 border-black font-display text-xs sm:text-sm font-black uppercase shadow-[3px_3px_0_0_#000] cursor-pointer"
+            className="w-full py-2.5 bg-white hover:bg-neutral-100 text-black border-3 border-black font-display text-xs sm:text-sm font-black uppercase shadow-[3px_3px_0_0_#000] cursor-pointer"
           >
             ← BACK
           </button>
@@ -180,7 +237,7 @@ export function CommentaryCard({
   // 5. READY / WAITING FOR FIRST BALL
   if (!lastEvent) {
     return (
-      <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 text-black text-left flex-shrink-0 animate-slide-up">
+      <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-4 text-black text-left flex-shrink-0 animate-slide-up">
         <h3 className="font-display text-2xl sm:text-3xl font-black uppercase tracking-tight leading-none mb-1 text-black">
           {isTeamABatting ? 'READY TO BAT' : 'READY TO BOWL'}
         </h3>
@@ -195,7 +252,7 @@ export function CommentaryCard({
   const { isOut, runsScored, batterThrow, bowlerThrow } = lastEvent;
 
   return (
-    <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 text-black text-left flex-shrink-0 animate-slide-up">
+    <div className="w-full max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-4 text-black text-left flex-shrink-0 animate-slide-up">
       <h3 className="font-display text-2xl sm:text-3xl font-black uppercase tracking-tight leading-none mb-1 text-black">
         {isOut ? 'OUT!' : 'RUNS'}
       </h3>
@@ -205,7 +262,7 @@ export function CommentaryCard({
       </p>
 
       {/* Prominent White Box with +X ON THE BOARD (Matches Reference Image 4) */}
-      <div className="inline-block bg-white text-black border-2 sm:border-3 border-black px-3 py-1 font-num text-xs sm:text-sm font-black shadow-[2px_2px_0_0_#000]">
+      <div className="inline-block bg-white text-black border-2 sm:border-3 border-black px-3.5 py-1.5 font-num text-xs sm:text-sm font-black shadow-[2px_2px_0_0_#000]">
         {isOut ? (
           <span className="text-[#ff3b30]">WICKET FALLS!</span>
         ) : (
