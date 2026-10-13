@@ -36,10 +36,12 @@ export function WebcamHandTracker({
   const [holdProgress, setHoldProgress] = useState<number>(0);
   const [confirmedValue, setConfirmedValue] = useState<ThrowValue | null>(null);
 
+  const [modelStatusText, setModelStatusText] = useState<string>('Initializing AI...');
+
   // References for timing, cooldown, and single fire per ball
   const hasFiredRef = useRef(false);
-  // Responsive hold duration: 400ms for quick and natural recognition
-  const stabilizerRef = useRef(new ThrowStabilizer(400));
+  // Responsive hold duration: 320ms for fast, natural recognition
+  const stabilizerRef = useRef(new ThrowStabilizer(320));
   const animationFrameId = useRef<number | null>(null);
   const lastProcessedTime = useRef<number>(0);
   const lastFiredTime = useRef<number>(0);
@@ -50,30 +52,36 @@ export function WebcamHandTracker({
 
     async function initMediaPipe() {
       setIsModelLoading(true);
+      setModelStatusText('Loading vision engine...');
       try {
-        let vision;
-        const cdnWasmUrl = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/wasm';
+        let vision: any = null;
+        const wasmUrls = [
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/wasm',
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm',
+          '/wasm',
+        ];
 
-        try {
-          vision = await FilesetResolver.forVisionTasks(cdnWasmUrl);
-        } catch {
+        for (const url of wasmUrls) {
           try {
-            vision = await FilesetResolver.forVisionTasks('/wasm');
-          } catch {
-            vision = await FilesetResolver.forVisionTasks(
-              'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
-            );
+            vision = await FilesetResolver.forVisionTasks(url);
+            if (vision) break;
+          } catch (wasmErr) {
+            console.warn(`FilesetResolver failed for ${url}:`, wasmErr);
           }
         }
 
         if (isCancelled) return;
+        if (!vision) {
+          throw new Error('Failed to load MediaPipe WASM runtime from CDN and local.');
+        }
 
+        setModelStatusText('Loading hand model...');
         const remoteModelUrl =
           'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
         let handLandmarker: HandLandmarker | null = null;
 
-        // Try CPU first or GPU with graceful fallback
+        // Try delegates: GPU first, fallback to CPU
         const delegates: ('GPU' | 'CPU')[] = ['GPU', 'CPU'];
         const modelPaths = ['/models/hand_landmarker.task', remoteModelUrl];
 
@@ -88,13 +96,16 @@ export function WebcamHandTracker({
                 },
                 runningMode: 'VIDEO',
                 numHands: 1,
-                minHandDetectionConfidence: 0.35,
-                minHandPresenceConfidence: 0.35,
-                minTrackingConfidence: 0.35,
+                minHandDetectionConfidence: 0.3,
+                minHandPresenceConfidence: 0.3,
+                minTrackingConfidence: 0.3,
               });
-              if (handLandmarker) break;
+              if (handLandmarker) {
+                console.log(`HandLandmarker initialized successfully with ${modelPath} (${delegate})`);
+                break;
+              }
             } catch (createErr) {
-              // Try next option
+              console.warn(`HandLandmarker failed with ${modelPath} (${delegate}):`, createErr);
             }
           }
         }
@@ -104,13 +115,14 @@ export function WebcamHandTracker({
         if (handLandmarker) {
           setLandmarker(handLandmarker);
           setIsModelLoading(false);
+          setModelStatusText('AI Ready');
         } else {
-          throw new Error('Could not load HandLandmarker model');
+          throw new Error('Could not load HandLandmarker model weights');
         }
       } catch (err: any) {
         console.error('HandLandmarker init error:', err);
         setIsModelLoading(false);
-        setErrorMessage('Failed to initialize hand tracking vision model.');
+        setErrorMessage(`AI Model error: ${err.message || 'Vision model failed to start'}`);
       }
     }
 
@@ -120,7 +132,7 @@ export function WebcamHandTracker({
     };
   }, []);
 
-  // Request Webcam Stream
+  // Request Webcam Stream with multi-event play readiness
   const startCamera = useCallback(async () => {
     try {
       setErrorMessage(null);
@@ -138,12 +150,27 @@ export function WebcamHandTracker({
       });
 
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play().catch((e) => console.log('Video play error:', e));
+        const video = videoRef.current;
+        video.srcObject = stream;
+        video.setAttribute('playsinline', 'true');
+        video.muted = true;
+
+        const markReadyAndPlay = async () => {
+          try {
+            await video.play();
+          } catch (e) {
+            console.warn('Autoplay prevented, awaiting user interaction:', e);
+          }
           setHasPermission(true);
         };
+
+        if (video.readyState >= 1) {
+          markReadyAndPlay();
+        } else {
+          video.onloadedmetadata = markReadyAndPlay;
+          video.onloadeddata = markReadyAndPlay;
+          video.oncanplay = markReadyAndPlay;
+        }
       }
     } catch (err: any) {
       console.error('Camera access error:', err);
@@ -171,6 +198,7 @@ export function WebcamHandTracker({
     if (!landmarker || !videoRef.current || hasPermission !== true) return;
 
     let isRunning = true;
+    let lastTimestamp = 0;
 
     const processLoop = () => {
       if (!isRunning) return;
@@ -178,12 +206,15 @@ export function WebcamHandTracker({
       const canvas = canvasRef.current;
 
       if (video && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-        const now = performance.now();
-        if (now - lastProcessedTime.current >= 33) {
-          lastProcessedTime.current = now;
+        const perfNow = performance.now();
+        if (perfNow - lastProcessedTime.current >= 33) {
+          lastProcessedTime.current = perfNow;
+          // Ensure strictly monotonically increasing timestamp for detectForVideo
+          const timestamp = Math.max(perfNow, lastTimestamp + 1);
+          lastTimestamp = timestamp;
 
           try {
-            const results = landmarker.detectForVideo(video, now);
+            const results = landmarker.detectForVideo(video, timestamp);
             const ctx = canvas?.getContext('2d');
 
             if (canvas && ctx) {
@@ -233,7 +264,7 @@ export function WebcamHandTracker({
                 setDetection(classified);
 
                 // Stabilization & Throw detection: valid throws are 1 to 6
-                const isCooldownDone = Date.now() - lastFiredTime.current > 500;
+                const isCooldownDone = Date.now() - lastFiredTime.current > 400;
 
                 if (
                   isThrowRequired &&
@@ -268,8 +299,8 @@ export function WebcamHandTracker({
                 setHoldProgress(0);
               }
             }
-          } catch (e) {
-            // Frame skip
+          } catch (detectionErr) {
+            console.warn('detectForVideo frame error:', detectionErr);
           }
         }
       }
@@ -317,12 +348,18 @@ export function WebcamHandTracker({
         {isModelLoading ? (
           <>
             <Loader2 className="w-3 h-3 animate-spin" />
-            <span>AI LOADING...</span>
+            <span className="uppercase">{modelStatusText}</span>
           </>
         ) : (
           <>
-            <span>{activeNumber !== null ? '👋' : '✋'}</span>
-            <span>{activeNumber !== null ? `SEES ${activeNumber}` : 'NO HAND'}</span>
+            <span>{activeNumber !== null ? '👋' : detection.detected ? '🤏' : '✋'}</span>
+            <span>
+              {activeNumber !== null
+                ? `SEES ${activeNumber}`
+                : detection.detected
+                ? 'DETECTING...'
+                : 'SHOW HAND'}
+            </span>
           </>
         )}
       </div>

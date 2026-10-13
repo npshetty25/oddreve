@@ -35,17 +35,21 @@ function isFingerExtended(
 
   const distTipWrist = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
   const distPipWrist = Math.hypot(pip.x - wrist.x, pip.y - wrist.y);
+  const distMcpWrist = Math.hypot(mcp.x - wrist.x, mcp.y - wrist.y);
 
   const distTipMcp = Math.hypot(tip.x - mcp.x, tip.y - mcp.y);
   const distPipMcp = Math.hypot(pip.x - mcp.x, pip.y - mcp.y);
 
-  // If tip is higher than PIP and MCP in vertical screen coordinates (smaller y = higher)
+  // 1. Upright check: Tip is clearly above PIP and MCP in y (smaller y = higher)
   const isUprightExtended = tip.y < pip.y && pip.y < mcp.y;
 
-  // General distance check regardless of rotation
-  const isDistExtended = distTipWrist > distPipWrist * 1.08 && distTipMcp > distPipMcp * 1.15;
+  // 2. Relative distance from wrist: Tip is further from wrist than PIP
+  const isWristExtended = distTipWrist > distPipWrist * 1.05 && distTipWrist > distMcpWrist * 1.15;
 
-  return isUprightExtended || isDistExtended;
+  // 3. Tip distance from MCP vs PIP from MCP
+  const isMcpExtended = distTipMcp > distPipMcp * 1.1;
+
+  return isUprightExtended || (isWristExtended && isMcpExtended);
 }
 
 /**
@@ -58,16 +62,18 @@ function isThumbExtended(landmarks: HandLandmark[]): boolean {
   const thumbIp = landmarks[3];
   const thumbMcp = landmarks[2];
   const indexMcp = landmarks[5];
+  const pinkyMcp = landmarks[17];
   const wrist = landmarks[0];
 
   const distTipWrist = Math.hypot(thumbTip.x - wrist.x, thumbTip.y - wrist.y);
   const distMcpWrist = Math.hypot(thumbMcp.x - wrist.x, thumbMcp.y - wrist.y);
   const distTipIndexMcp = Math.hypot(thumbTip.x - indexMcp.x, thumbTip.y - indexMcp.y);
+  const distTipPinkyMcp = Math.hypot(thumbTip.x - pinkyMcp.x, thumbTip.y - pinkyMcp.y);
 
   // Thumbs up check: thumb tip is vertically above thumb MCP & wrist, and far from index
-  const isThumbsUpOriented = thumbTip.y < thumbIp.y && thumbIp.y < thumbMcp.y && distTipIndexMcp > 0.08;
+  const isThumbsUpOriented = thumbTip.y < thumbIp.y && thumbIp.y < thumbMcp.y && distTipIndexMcp > 0.07;
 
-  const isSpread = distTipWrist > distMcpWrist * 1.05 && distTipIndexMcp > 0.10;
+  const isSpread = distTipWrist > distMcpWrist * 1.04 && distTipIndexMcp > 0.08 && distTipPinkyMcp > 0.12;
 
   return isThumbsUpOriented || isSpread;
 }
@@ -107,7 +113,7 @@ export function classifyHandGesture(
   let throwVal: ThrowValue = 0;
   let label = 'Closed Fist (0)';
 
-  // Case 6: Thumbs up -> Thumb extended, but zero or at most 1 slightly loose finger
+  // Case 6: Thumbs up -> Thumb extended, but no main fingers extended (or at most 0)
   if (thumbExt && mainFingersCount === 0) {
     throwVal = 6;
     label = 'Thumbs Up (6)';
@@ -120,6 +126,10 @@ export function classifyHandGesture(
     throwVal = 4;
     label = 'Four (4)';
   } else if (mainFingersCount === 3) {
+    throwVal = 3;
+    label = 'Three (3)';
+  } else if (mainFingersCount === 2 && thumbExt) {
+    // Some people show 3 as thumb + index + middle
     throwVal = 3;
     label = 'Three (3)';
   } else if (mainFingersCount === 2) {
