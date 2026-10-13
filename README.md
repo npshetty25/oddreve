@@ -1,86 +1,85 @@
-# HandCricket Friends 🏏⚾
+# ODDOREVE 🏏⚾
 
-A modern, browser-based hand cricket & baseball game where players throw 0–6 fingers at their webcam, powered by client-side MediaPipe landmark detection, pure unit-tested game engines, Zustand state management, and cryptographic anti-cheat multiplayer commitments.
+**ODDOREVE** is a next-generation browser-based hand cricket and baseball game powered by client-side MediaPipe landmark detection, pure TypeScript game mechanics, Zustand state management, and cryptographic anti-cheat multiplayer commitments.
 
----
-
-## 🚀 Quick Setup & Running Locally
-
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-2. **Run tests**:
-   ```bash
-   npm test
-   ```
-3. **Start local development server**:
-   ```bash
-   npm run dev
-   ```
-4. Open [http://localhost:3000](http://localhost:3000) in your browser.
+Developed by [@npshetty25](https://github.com/npshetty25).
 
 ---
 
-## ✋ Hand Gestures & Detection (Values 0–6)
-- `0`: **Closed Fist** (all fingers folded)
-- `1`: **One** (Index finger extended)
-- `2`: **Two / Peace** (Index + Middle extended)
-- `3`: **Three** (Index + Middle + Ring extended)
-- `4`: **Four** (All 4 main fingers extended, thumb folded)
-- `5`: **Open Palm** (All 5 digits extended: 4 fingers + thumb)
-- `6`: **Thumbs Up** (Thumb extended upright, 4 fingers curled)
+## ⚡ Quick Start
 
-> **Stability Filter**: The app enforces a **300ms continuous hold** of the gesture before locking in a throw, preventing camera flicker from registering accidental inputs.
-> **Keyboard Fallback**: If no camera is available or permissions are declined, players can use keys `0`–`6` (or `Q`–`U` for Player 2) directly on screen.
+```bash
+# Install dependencies
+npm install
+
+# Run unit tests (29 tests)
+npm test
+
+# Run local development server
+npm run dev
+```
+
+Visit [http://localhost:3000](http://localhost:3000) in your browser.
+
+---
+
+## ✋ Hand Gestures & Landmark Detection (Values 0–6)
+
+- **`0`**: Closed Fist (all fingers tucked)
+- **`1`**: One (index finger extended)
+- **`2`**: Two / Peace (index + middle fingers extended)
+- **`3`**: Three (index + middle + ring extended)
+- **`4`**: Four (four fingers extended, thumb folded)
+- **`5`**: Open Palm (all 5 digits extended)
+- **`6`**: Thumbs Up (upright thumb, other fingers folded)
+
+> **Stabilizer Engine**: Enforces a ~280ms consistent hold to eliminate camera jitter before locking in a throw.
+> **Accessible Fallback**: Integrated 0–6 quick tap buttons and keyboard shortcuts are always available if no camera is connected.
 
 ---
 
 ## 🎮 Game Modes
 
-### 1. Cricket Mode (1v1 & 2v2)
-- **Toss**: Players call Odd/Even and throw. Toss winner selects Bat or Bowl.
-- **Innings**:
-  - Batter throws $b$, Bowler throws $o$.
-  - If $b = o$: **OUT!** Batter is dismissed.
-  - If $b \ne o$: Batter scores $b$ runs.
-- **Target Chase**: Second innings chases `Target = First Innings Score + 1`. Matches can be won, lost, or tied!
+### 1. Cricket Mode
+- **Toss**: One player calls Odd or Even; both throw. Sum determines the toss winner, who elects to Bat or Bowl.
+- **Innings**: Batter scores their throw. If both throws match, the batter is **OUT**!
+- **Target Chase**: Second innings chases `Target = First Innings Score + 1`.
 
 ### 2. Baseball Mode
-- If $|b - o| = 1$: **Strike!**
-- If $b = o$:
-  - Batter with **0 strikes**: Scores **$2 \times b$ runs (Double!)**.
-  - Batter with **1 strike**: Counts as a **Strike** instead of a double.
-- Otherwise: Batter scores $b$ runs.
-- **Three Strikes = OUT!**
+- $|b - o| = 1 \implies$ **Strike** (3 strikes = OUT).
+- $b = o$: If 0 strikes $\implies$ **Double Runs ($2 \times b$)**; if 1 strike $\implies$ counts as a Strike.
+- Otherwise $\implies$ batter scores $b$ runs.
 
-### 3. 2v2 Teams & Over Format
-- Configurable overs (default 2 overs = 12 balls).
-- Bowlers alternate each over (every 6 balls).
-- Next teammate bats when active batter gets out. All out when both batters are dismissed.
-- Tracks player stats: runs, balls faced, wickets taken, and runs conceded.
+### 3. 2v2 Team Format (Until Both Batters Are Out)
+- Two named players per team.
+- Innings continues until both batters on the team are dismissed.
+- Bowling alternates every over (every 6 balls).
 
----
-
-## 🌐 Phase 4: Online Multiplayer Architecture
-- **Room Code**: Host creates a room with code; friends join from another browser or device.
-- **Simultaneous Throws & Anti-Cheat**:
-  - Each player commits a hash: `SHA-256(throwValue + ":" + nonce)`.
-  - Once both commitments arrive, players reveal `throwValue` and `nonce`.
-  - The server verifies matching hashes before resolving the ball, ensuring neither player can react to the other's choice.
-- **Reconnection Handling**: 30-second grace period for disconnected players before match forfeiture.
+### 4. 🤖 Play Against Computer
+- Play solo matches against an automated bot that participates in tosses and throws simultaneously.
 
 ---
 
-## 🧪 Unit Tests Suite
-Run Vitest with:
+## 🌐 Anti-Cheat Online Multiplayer
+
+- **Room Code**: Host creates a room and shares the 5-character code.
+- **Cryptographic Commitments**:
+  1. Each player submits a commitment hash: $\text{SHA-256}(throwValue + \text{":"} + nonce)$.
+  2. Once both commitments arrive at the server, both players reveal their throw + nonce.
+  3. The server validates that the reveals match their hashes before resolving the ball, preventing either player from waiting to see the other's hand.
+- **Reconnection Window**: 30-second grace period before forfeiture.
+
+---
+
+## 🧪 Testing
+
 ```bash
 npm test
 ```
-Includes 29 tests covering:
-- Toss resolution (odd/even, winner assignment)
-- Cricket rules (out on equal throws, run accumulation, chase win, chase loss, tie)
-- Baseball rules (strike differences, doubles with 0 strikes, equal throws with 1 strike, strike 3 out)
-- 2v2 rotation (over counting 1.5 → 2.0, bowler alternation, batter rotation, all-out)
-- Gesture classifier & 300ms stabilization
-- Multiplayer commitment & reveal cryptographic verification, room lobbies, and 30s reconnection window.
+
+Runs 29 tests across:
+- Cricket rules & chase resolution
+- Baseball strikes, doubles, and strike-out conditions
+- 2v2 rotation and all-out state
+- Vision classifier & stability filtering
+- Multiplayer commitment-reveal cryptography and lobby state transitions
