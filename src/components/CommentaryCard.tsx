@@ -100,26 +100,39 @@ export function CommentaryCard({
   // 3. TOSS RESULT PHASE
   if (match.phase === 'toss_result') {
     const isUserWinner = match.toss.winnerTeamId === match.teamA.id;
+    const winnerName = isUserWinner ? 'YOU' : match.teamB.name.toUpperCase();
+    const callerName = match.toss.callerTeamId === match.teamA.id ? 'YOU' : match.teamB.name.toUpperCase();
     const throwA = match.toss.teamAThrow ?? 0;
     const throwB = match.toss.teamBThrow ?? 0;
     const sum = throwA + throwB;
     const isEven = sum % 2 === 0;
+    const outcome = isEven ? 'EVEN' : 'ODD';
+    const choice = match.toss.choice;
+    const roleTerm = isBaseball ? 'PITCH' : 'BOWL';
 
     return (
-      <div className="w-full max-w-5xl mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 text-black text-left flex-shrink-0 animate-slide-up">
-        <div className="flex items-center justify-between mb-1">
+      <div className="w-full max-w-5xl mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-3 sm:p-4 text-black text-left flex-shrink-0 animate-slide-up">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-2">
           <h3 className="font-display text-xl sm:text-2xl font-black uppercase tracking-tight leading-none text-black">
-            {isUserWinner ? 'YOU WON THE TOSS!' : 'OPPONENT WON THE TOSS!'}
+            🪙 {isUserWinner ? 'YOU WON THE TOSS!' : `${winnerName} WON THE TOSS!`}
           </h3>
-          <span className="font-num text-[11px] font-black bg-white px-2 py-0.5 border-2 border-black">
-            {throwA} + {throwB} = {sum} ({isEven ? 'EVEN' : 'ODD'})
-          </span>
+          <div className="flex items-center gap-1.5 font-num text-[11px] font-black bg-white px-2.5 py-1 border-2 border-black shadow-[1px_1px_0_0_#000]">
+            <span>YOU: {throwA}</span>
+            <span>+</span>
+            <span>{match.teamB.name.toUpperCase()}: {throwB}</span>
+            <span>=</span>
+            <span className="bg-[#a3f23d] px-1">{sum} ({outcome})</span>
+          </div>
         </div>
+
+        <p className="font-num text-xs font-bold text-black/90 mb-2">
+          {callerName} called <span className="uppercase underline font-black">{match.toss.call}</span>. Total is {sum} ({outcome}). {winnerName} won the toss!
+        </p>
 
         {isUserWinner ? (
           <div>
-            <p className="font-body text-xs text-black mb-2">
-              Choose your role to start the match:
+            <p className="font-display text-xs sm:text-sm font-black text-black mb-2 uppercase">
+              CHOOSE YOUR ROLE TO START THE MATCH:
             </p>
             <div className="flex gap-2.5 max-w-xs">
               <button
@@ -132,14 +145,18 @@ export function CommentaryCard({
                 onClick={() => onChooseToss?.('bowl')}
                 className="flex-1 py-2 bg-[#ff6fb5] hover:bg-[#ff5ca8] border-2 sm:border-3 border-black font-display text-xs sm:text-sm font-black text-black uppercase shadow-[2px_2px_0_0_#000] cursor-pointer"
               >
-                {isBaseball ? 'PITCH FIRST' : 'BOWL FIRST'}
+                {roleTerm} FIRST
               </button>
             </div>
           </div>
         ) : (
-          <p className="font-body text-xs text-black font-bold">
-            Opponent is choosing to bat or {isBaseball ? 'pitch' : 'bowl'}...
-          </p>
+          <div className="bg-white border-2 border-black p-2 shadow-[2px_2px_0_0_#000] max-w-md">
+            <p className="font-display text-sm font-black text-black uppercase">
+              {choice
+                ? `📢 ${winnerName} CHOSE TO ${choice === 'bat' ? 'BAT' : roleTerm} FIRST!`
+                : `⏳ ${winnerName} is choosing to bat or ${roleTerm.toLowerCase()}...`}
+            </p>
+          </div>
         )}
       </div>
     );

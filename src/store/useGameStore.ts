@@ -167,15 +167,35 @@ export const useGameStore = create<GameStore>((set, get) => ({
         const compThrow = getRandomThrow();
         const nextState = resolveTossThrows(match, value, compThrow);
 
-        // If computer won toss, computer auto-picks bat or bowl after short delay
+        // If computer won toss, show toss_result first, then proceed to innings1 after a delay
         if (nextState.toss.winnerTeamId === match.teamB.id) {
           const compChoice: TossChoice = Math.random() > 0.5 ? 'bat' : 'bowl';
-          const chosenState = selectTossChoice(nextState, compChoice);
+          // Store choice on toss object so UI displays what computer chose!
+          const stateWithChoice = {
+            ...nextState,
+            toss: {
+              ...nextState.toss,
+              choice: compChoice,
+            },
+          };
           set({
-            match: chosenState,
+            match: stateWithChoice,
             pendingThrows: { teamA: null, teamB: null },
             ballCycle: get().ballCycle + 1,
           });
+
+          // Wait 2.5 seconds so user clearly sees who won and what computer picked
+          setTimeout(() => {
+            const currentMatch = get().match;
+            if (currentMatch.phase === 'toss_result') {
+              const chosenState = selectTossChoice(currentMatch, compChoice);
+              set({
+                match: chosenState,
+                pendingThrows: { teamA: null, teamB: null },
+                ballCycle: get().ballCycle + 1,
+              });
+            }
+          }, 2400);
         } else {
           set({
             match: nextState,

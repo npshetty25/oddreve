@@ -190,6 +190,15 @@ export function Scoreboard({ match, lastEvent }: ScoreboardProps) {
           </div>
         )}
 
+        {/* Toss Decision Strip in 1st Innings */}
+        {!isSecondInnings && !isMatchOver && match.phase === 'innings1' && match.toss.winnerTeamId && match.toss.choice && (
+          <div className="mt-2 -mx-3 -mb-2 sm:-mx-4 sm:-mb-2.5 bg-[#ffd60a] border-t-2 border-black py-0.5 px-2 text-center">
+            <span className="font-num text-[10px] sm:text-[11px] font-black uppercase text-black tracking-wider">
+              🪙 {match.toss.winnerTeamId === match.teamA.id ? 'YOU' : match.teamB.name.toUpperCase()} WON TOSS & CHOSE TO {match.toss.choice === 'bat' ? 'BAT' : isBaseball ? 'PITCH' : 'BOWL'} FIRST
+            </span>
+          </div>
+        )}
+
         {/* Target Strip Below: "NEEDS X TO WIN" */}
         {(isSecondInnings || isMatchOver) && runsNeeded !== null && (
           <div className="mt-2 -mx-3 -mb-2 sm:-mx-4 sm:-mb-2.5 bg-[#ffd60a] border-t-2 border-black py-1 px-2 text-center">

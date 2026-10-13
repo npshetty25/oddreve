@@ -47,90 +47,84 @@ export function WebcamHandTracker({
   const lastFiredTime = useRef<number>(0);
 
   // Initialize MediaPipe Tasks Vision with robust multi-tiered fallback
-  useEffect(() => {
-    let isCancelled = false;
+  // Initialize MediaPipe Tasks Vision with robust multi-tiered fallback
+  const initMediaPipe = useCallback(async () => {
+    setIsModelLoading(true);
+    setErrorMessage(null);
+    setModelStatusText('Loading vision engine...');
+    try {
+      let vision: any = null;
+      const wasmUrls = [
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/wasm',
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm',
+        '/wasm',
+      ];
 
-    async function initMediaPipe() {
-      setIsModelLoading(true);
-      setModelStatusText('Loading vision engine...');
-      try {
-        let vision: any = null;
-        const wasmUrls = [
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/wasm',
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm',
-          '/wasm',
-        ];
-
-        for (const url of wasmUrls) {
-          try {
-            vision = await FilesetResolver.forVisionTasks(url);
-            if (vision) break;
-          } catch (wasmErr) {
-            console.warn(`FilesetResolver failed for ${url}:`, wasmErr);
-          }
+      for (const url of wasmUrls) {
+        try {
+          vision = await FilesetResolver.forVisionTasks(url);
+          if (vision) break;
+        } catch (wasmErr) {
+          console.warn(`FilesetResolver failed for ${url}:`, wasmErr);
         }
-
-        if (isCancelled) return;
-        if (!vision) {
-          throw new Error('Failed to load MediaPipe WASM runtime from CDN and local.');
-        }
-
-        setModelStatusText('Loading hand model...');
-        const remoteModelUrl =
-          'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-
-        let handLandmarker: HandLandmarker | null = null;
-
-        // Try delegates: GPU first, fallback to CPU
-        const delegates: ('GPU' | 'CPU')[] = ['GPU', 'CPU'];
-        const modelPaths = ['/models/hand_landmarker.task', remoteModelUrl];
-
-        for (const modelPath of modelPaths) {
-          if (handLandmarker) break;
-          for (const delegate of delegates) {
-            try {
-              handLandmarker = await HandLandmarker.createFromOptions(vision, {
-                baseOptions: {
-                  modelAssetPath: modelPath,
-                  delegate,
-                },
-                runningMode: 'VIDEO',
-                numHands: 1,
-                minHandDetectionConfidence: 0.3,
-                minHandPresenceConfidence: 0.3,
-                minTrackingConfidence: 0.3,
-              });
-              if (handLandmarker) {
-                console.log(`HandLandmarker initialized successfully with ${modelPath} (${delegate})`);
-                break;
-              }
-            } catch (createErr) {
-              console.warn(`HandLandmarker failed with ${modelPath} (${delegate}):`, createErr);
-            }
-          }
-        }
-
-        if (isCancelled) return;
-
-        if (handLandmarker) {
-          setLandmarker(handLandmarker);
-          setIsModelLoading(false);
-          setModelStatusText('AI Ready');
-        } else {
-          throw new Error('Could not load HandLandmarker model weights');
-        }
-      } catch (err: any) {
-        console.error('HandLandmarker init error:', err);
-        setIsModelLoading(false);
-        setErrorMessage(`AI Model error: ${err.message || 'Vision model failed to start'}`);
       }
-    }
 
-    initMediaPipe();
-    return () => {
-      isCancelled = true;
-    };
+      if (!vision) {
+        throw new Error('Failed to load MediaPipe WASM runtime from CDN and local.');
+      }
+
+      setModelStatusText('Loading hand model...');
+      const remoteModelUrl =
+        'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+      let handLandmarker: HandLandmarker | null = null;
+
+      // Try delegates: GPU first, fallback to CPU
+      const delegates: ('GPU' | 'CPU')[] = ['GPU', 'CPU'];
+      const modelPaths = ['/models/hand_landmarker.task', remoteModelUrl];
+
+      for (const modelPath of modelPaths) {
+        if (handLandmarker) break;
+        for (const delegate of delegates) {
+          try {
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+              baseOptions: {
+                modelAssetPath: modelPath,
+                delegate,
+              },
+              runningMode: 'VIDEO',
+              numHands: 1,
+              minHandDetectionConfidence: 0.3,
+              minHandPresenceConfidence: 0.3,
+              minTrackingConfidence: 0.3,
+            });
+            if (handLandmarker) {
+              console.log(`HandLandmarker initialized successfully with ${modelPath} (${delegate})`);
+              break;
+            }
+          } catch (createErr) {
+            console.warn(`HandLandmarker failed with ${modelPath} (${delegate}):`, createErr);
+          }
+        }
+      }
+
+      if (handLandmarker) {
+        setLandmarker(handLandmarker);
+        setIsModelLoading(false);
+        setModelStatusText('AI Ready');
+      } else {
+        throw new Error('Could not load HandLandmarker model weights');
+      }
+    } catch (err: any) {
+      console.error('HandLandmarker init error:', err);
+      setIsModelLoading(false);
+      setErrorMessage(`AI Model error: ${err.message || 'Vision model failed to start'}`);
+    }
   }, []);
+
+  useEffect(() => {
+    initMediaPipe();
+  }, [initMediaPipe]);
 
   // Request Webcam Stream with multi-event play readiness
   const startCamera = useCallback(async () => {
@@ -379,11 +373,14 @@ export function WebcamHandTracker({
           <AlertCircle className="w-8 h-8 text-[#ff3b30] mb-1" />
           <p className="text-xs font-mono text-black mb-2">{errorMessage}</p>
           <button
-            onClick={startCamera}
+            onClick={() => {
+              initMediaPipe();
+              startCamera();
+            }}
             className="nb-btn nb-btn--lime nb-btn--sm flex items-center gap-1.5 text-xs py-1 px-2.5"
           >
             <RefreshCw className="w-3 h-3" />
-            <span>Retry Camera</span>
+            <span>Retry Camera & AI</span>
           </button>
         </div>
       )}

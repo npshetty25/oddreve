@@ -54,27 +54,41 @@ function isFingerExtended(
 
 /**
  * Robust thumb check:
- * - When making a fist, thumb is folded across the palm/fingers (tip is close to index/middle MCP).
- * - When extended (palm or thumbs up), thumb tip is spread far from index MCP (5) and pinky MCP (17).
+ * - When showing 4 fingers, the thumb is folded inward across the palm or tucked against index.
+ *   Its tip is close to the index MCP (5) or palm center.
+ * - When showing 5 fingers (open palm), the thumb is extended outward away from the index finger.
+ *   Specifically, the distance between thumb TIP (4) and index MCP (5) / index PIP (6) is significantly larger,
+ *   and the thumb tip projects sideways away from the index MCP.
+ * - When showing 6 (thumbs up), the thumb points upwards and all other fingers are curled into a fist.
  */
-function isThumbExtended(landmarks: HandLandmark[]): boolean {
+function isThumbExtended(landmarks: HandLandmark[], mainFingersCount: number = 0): boolean {
   const thumbTip = landmarks[4];
   const thumbIp = landmarks[3];
   const thumbMcp = landmarks[2];
   const indexMcp = landmarks[5];
+  const indexPip = landmarks[6];
   const pinkyMcp = landmarks[17];
   const wrist = landmarks[0];
 
   const distTipWrist = Math.hypot(thumbTip.x - wrist.x, thumbTip.y - wrist.y);
   const distMcpWrist = Math.hypot(thumbMcp.x - wrist.x, thumbMcp.y - wrist.y);
   const distTipIndexMcp = Math.hypot(thumbTip.x - indexMcp.x, thumbTip.y - indexMcp.y);
+  const distTipIndexPip = Math.hypot(thumbTip.x - indexPip.x, thumbTip.y - indexPip.y);
   const distTipPinkyMcp = Math.hypot(thumbTip.x - pinkyMcp.x, thumbTip.y - pinkyMcp.y);
 
   // Thumbs up check: thumb tip is vertically above thumb MCP & wrist, and far from index
-  const isThumbsUpOriented = thumbTip.y < thumbIp.y && thumbIp.y < thumbMcp.y && distTipIndexMcp > 0.07;
+  const isThumbsUpOriented = thumbTip.y < thumbIp.y && thumbIp.y < thumbMcp.y && distTipIndexMcp > 0.08;
 
-  const isSpread = distTipWrist > distMcpWrist * 1.04 && distTipIndexMcp > 0.08 && distTipPinkyMcp > 0.12;
+  // When all 4 main fingers are extended (evaluating 4 vs 5):
+  // For open palm (5), thumb must be clearly spread outward away from both index MCP and index PIP!
+  // If user is showing 4, the thumb is folded over palm or tucked against index MCP.
+  if (mainFingersCount >= 3) {
+    const isSpreadFromIndex = distTipIndexMcp > 0.12 && distTipIndexPip > 0.11;
+    const isSpreadFromWrist = distTipWrist > distMcpWrist * 1.12;
+    return isSpreadFromIndex && isSpreadFromWrist;
+  }
 
+  const isSpread = distTipWrist > distMcpWrist * 1.05 && distTipIndexMcp > 0.09 && distTipPinkyMcp > 0.13;
   return isThumbsUpOriented || isSpread;
 }
 
@@ -106,9 +120,8 @@ export function classifyHandGesture(
   const middleExt = isFingerExtended(landmarks, 12, 10, 9);
   const ringExt = isFingerExtended(landmarks, 16, 14, 13);
   const pinkyExt = isFingerExtended(landmarks, 20, 18, 17);
-  const thumbExt = isThumbExtended(landmarks);
-
   const mainFingersCount = (indexExt ? 1 : 0) + (middleExt ? 1 : 0) + (ringExt ? 1 : 0) + (pinkyExt ? 1 : 0);
+  const thumbExt = isThumbExtended(landmarks, mainFingersCount);
 
   let throwVal: ThrowValue = 0;
   let label = 'Closed Fist (0)';
