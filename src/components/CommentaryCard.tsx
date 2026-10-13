@@ -13,14 +13,14 @@ export function CommentaryCard({ lastEvent, mode, warningMessage }: CommentaryCa
   // If there's an active warning message, show it prominently
   if (warningMessage) {
     return (
-      <div className="w-full max-w-xl mx-auto bg-[#ff3b30] border-4 border-black shadow-[6px_6px_0_0_#000] p-4 text-white animate-bounce-in">
-        <div className="font-display text-xl sm:text-2xl uppercase tracking-wider mb-1">
-          WARNING!
+      <div className="w-full max-w-xl mx-auto bg-[#ff3b30] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-2.5 sm:p-3 text-white animate-bounce-in flex-shrink-0">
+        <div className="font-display text-lg sm:text-xl uppercase tracking-wider leading-none mb-1">
+          ⚠️ WARNING!
         </div>
-        <p className="font-body text-sm font-bold text-white mb-2">
+        <p className="font-body text-xs font-bold text-white mb-1.5">
           {warningMessage}
         </p>
-        <div className="inline-block bg-white text-black border-2 border-black font-num text-xs font-black px-3 py-1 shadow-[2px_2px_0_0_#000]">
+        <div className="inline-block bg-white text-black border-2 border-black font-num text-[10px] font-black px-2 py-0.5 shadow-[2px_2px_0_0_#000]">
           VALID THROWS: 1 TO 6 RUNS
         </div>
       </div>
@@ -29,16 +29,16 @@ export function CommentaryCard({ lastEvent, mode, warningMessage }: CommentaryCa
 
   if (!lastEvent) {
     return (
-      <div className="w-full max-w-xl mx-auto bg-[#ffd60a] border-4 border-black shadow-[6px_6px_0_0_#000] p-4 text-black text-left">
-        <h3 className="font-display text-2xl sm:text-3xl uppercase tracking-tight leading-none mb-1">
+      <div className="w-full max-w-xl mx-auto bg-[#ffd60a] border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-2.5 sm:p-3 text-black text-left flex-shrink-0">
+        <h3 className="font-display text-xl sm:text-2xl uppercase tracking-tight leading-none mb-1">
           {mode === 'cricket' ? 'READY TO BOWL' : 'BATTER UP!'}
         </h3>
-        <p className="font-body text-xs sm:text-sm text-black mb-3">
+        <p className="font-body text-[11px] text-black mb-2">
           {mode === 'cricket'
-            ? 'Show 1 to 6 fingers at camera for ~2s to lock your throw.'
+            ? 'Show 1 to 6 fingers at camera for ~1.5s to lock your throw.'
             : 'Baseball rules: Difference of 1 is a strike! 3 strikes = OUT.'}
         </p>
-        <div className="inline-block bg-white border-2 border-black font-num text-xs sm:text-sm font-black px-3 py-1 shadow-[2px_2px_0_0_#000]">
+        <div className="inline-block bg-white border-2 border-black font-num text-[11px] font-black px-2.5 py-0.5 shadow-[2px_2px_0_0_#000]">
           SHOW HAND (1–6)
         </div>
       </div>
@@ -67,20 +67,33 @@ export function CommentaryCard({ lastEvent, mode, warningMessage }: CommentaryCa
   }
 
   return (
-    <div className={`w-full max-w-xl mx-auto border-4 border-black shadow-[6px_6px_0_0_#000] p-4 text-black text-left transition-all ${bgColor}`}>
-      <h3 className="font-display text-2xl sm:text-3xl uppercase tracking-tight leading-none mb-1">
-        {headline}
-      </h3>
+    <div className={`w-full max-w-xl mx-auto border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] p-2.5 sm:p-3 text-black text-left transition-all flex-shrink-0 ${bgColor}`}>
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="font-display text-xl sm:text-2xl uppercase tracking-tight leading-none">
+          {headline}
+        </h3>
 
-      <div className="font-body text-xs sm:text-sm mb-2 opacity-90">
-        Batter {batterThrow}, bowler {bowlerThrow}. {description}
+        {/* Moves Comparison Badges - Clearly show both moves */}
+        <div className="flex items-center gap-1.5 font-num">
+          <div className="px-2 py-0.5 bg-black text-[#a3f23d] font-black text-xs border border-black shadow-[1px_1px_0_0_#000]">
+            BAT: {batterThrow}
+          </div>
+          <span className="font-display text-[10px] text-black font-black">vs</span>
+          <div className="px-2 py-0.5 bg-black text-[#ffd60a] font-black text-xs border border-black shadow-[1px_1px_0_0_#000]">
+            BOWL: {bowlerThrow}
+          </div>
+        </div>
+      </div>
+
+      <div className="font-body text-[11px] mb-1.5 opacity-90 leading-tight">
+        {description}
       </div>
 
       {/* Baseball Strike Dots */}
       {mode === 'baseball' && (
-        <div className="flex items-center gap-2 mb-2 font-num text-xs font-bold">
+        <div className="flex items-center gap-2 mb-1.5 font-num text-xs font-bold">
           <span>STRIKES:</span>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1">
             {[1, 2, 3].map((strikeNum) => {
               const active = isOut
                 ? true
@@ -88,7 +101,7 @@ export function CommentaryCard({ lastEvent, mode, warningMessage }: CommentaryCa
               return (
                 <span
                   key={strikeNum}
-                  className={`w-3.5 h-3.5 rounded-full border-2 border-black ${
+                  className={`w-3 h-3 rounded-full border-2 border-black ${
                     active ? 'bg-red-600' : 'bg-white'
                   }`}
                 />
@@ -99,7 +112,7 @@ export function CommentaryCard({ lastEvent, mode, warningMessage }: CommentaryCa
       )}
 
       {/* Prominent White Badge Box */}
-      <div className="inline-block bg-white text-black border-2 border-black font-num text-xs sm:text-sm font-black px-3 py-1 shadow-[2px_2px_0_0_#000]">
+      <div className="inline-block bg-white text-black border-2 border-black font-num text-xs font-black px-2.5 py-0.5 shadow-[2px_2px_0_0_#000]">
         {badgeText}
       </div>
     </div>
