@@ -67,6 +67,24 @@ export default function Home() {
   const [isJoiningRoom, setIsJoiningRoom] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [ballCooldownRemaining, setBallCooldownRemaining] = useState(0);
+
+  // Give both players three seconds to see the result before the next ball.
+  useEffect(() => {
+    if (!lastBallEvent || (match.phase !== 'innings1' && match.phase !== 'innings2')) {
+      setBallCooldownRemaining(0);
+      return;
+    }
+
+    const cooldownEndsAt = Date.now() + 3000;
+    const updateRemaining = () => {
+      setBallCooldownRemaining(Math.max(0, cooldownEndsAt - Date.now()));
+    };
+
+    updateRemaining();
+    const timer = window.setInterval(updateRemaining, 100);
+    return () => window.clearInterval(timer);
+  }, [ballCycle, lastBallEvent?.ballNumber, match.phase]);
 
   // Auto-detect URL ?room=code on mount and jump straight into match
   useEffect(() => {
@@ -147,10 +165,12 @@ export default function Home() {
 
   const myThrowReady = isHost ? pendingThrows.teamA !== null : pendingThrows.teamB !== null;
   const oppThrowReady = isHost ? pendingThrows.teamB !== null : pendingThrows.teamA !== null;
+  const isBallCooldown = ballCooldownRemaining > 0;
 
   const myThrowRequired =
     match.phase === 'toss_throw' ||
     ((match.phase === 'innings1' || match.phase === 'innings2') &&
+      !isBallCooldown &&
       (isHost ? pendingThrows.teamA === null : pendingThrows.teamB === null));
 
   // Last throws by both sides
@@ -173,6 +193,8 @@ export default function Home() {
 
   // Handlers for Local or Multiplayer Actions
   const handlePlayerThrow = async (val: ThrowValue) => {
+    if (isBallCooldown) return;
+
     if (activeRoom) {
       const action = match.phase === 'toss_throw' ? 'toss_throw' : 'throw';
       try {
@@ -811,6 +833,12 @@ export default function Home() {
         {/* 1. Scoreboard */}
         <Scoreboard match={match} lastEvent={lastBallEvent} />
 
+        {isBallCooldown && (
+          <div className="bg-[#ffd60a] border-2 border-black px-3 py-1 font-num text-xs font-black text-black shadow-[2px_2px_0_0_#000] animate-pulse">
+            NEXT BALL IN {Math.ceil(ballCooldownRemaining / 1000)}
+          </div>
+        )}
+
         {/* Ball History Strip */}
         {match.ballHistory.length > 0 && (
           <div className="w-full max-w-5xl mx-auto flex-shrink-0">
@@ -1098,6 +1126,7 @@ export default function Home() {
             <KeyboardFallback
               playerLabel={myName}
               selectedThrow={isHost ? pendingThrows.teamA : pendingThrows.teamB}
+              disabled={isBallCooldown}
               onThrow={(val) => {
                 handlePlayerThrow(val);
                 setShowTouchKeyboard(false);
