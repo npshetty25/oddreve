@@ -6,11 +6,11 @@ import { useTheme } from '@/store/useTheme';
 import { usePlayerProfile } from '@/store/usePlayerProfile';
 import { Scoreboard } from '@/components/Scoreboard';
 import { CommentaryCard } from '@/components/CommentaryCard';
-import { TossScreen } from '@/components/TossScreen';
-import { MatchResultScreen } from '@/components/MatchResultScreen';
+import { MultiplayerLobby } from '@/components/MultiplayerLobby';
+import { ServerRoom } from '@/app/api/rooms/route';
 import { WebcamHandTracker } from '@/components/WebcamHandTracker';
 import { KeyboardFallback } from '@/components/KeyboardFallback';
-import { GameMode, GameFormat, ThrowValue } from '@/engine/types';
+import { GameMode, GameFormat, ThrowValue, TossCall, TossChoice } from '@/engine/types';
 import {
   HelpCircle,
   X,
@@ -22,9 +22,9 @@ import {
 } from 'lucide-react';
 
 /* =========================================== */
-/* Screen Flow: 'landing' -> 'setup' -> 'playing' */
+/* Screen Flow: 'landing' -> 'setup' -> 'playing' | 'multiplayer_lobby' */
 /* =========================================== */
-type AppScreen = 'landing' | 'setup' | 'playing';
+type AppScreen = 'landing' | 'setup' | 'playing' | 'multiplayer_lobby';
 type OpponentChoice = 'friend' | 'computer';
 
 export default function Home() {
@@ -54,6 +54,50 @@ export default function Home() {
   const [showNameModal, setShowNameModal] = useState(false);
   const [showTouchKeyboard, setShowTouchKeyboard] = useState(false);
 
+  // Online Multiplayer State
+  const [activeRoom, setActiveRoom] = useState<ServerRoom | null>(null);
+  const [myMultiplayerId, setMyMultiplayerId] = useState<string>('');
+  const [urlRoomCode, setUrlRoomCode] = useState<string | null>(null);
+
+  // Detect URL ?room=code on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const room = params.get('room');
+      if (room) {
+        setUrlRoomCode(room.toLowerCase());
+        setScreen('multiplayer_lobby');
+      }
+    }
+  }, []);
+
+  // Sync online room state every 500ms when playing in a multiplayer room
+  useEffect(() => {
+    if (!activeRoom || screen !== 'playing') return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/rooms/${activeRoom.code}`);
+        const data = await res.json();
+        if (data.success && data.room) {
+          setActiveRoom(data.room);
+          if (data.room.match) {
+            useGameStore.setState({
+              match: data.room.match,
+              lastBallEvent: data.room.lastEvent,
+              ballCycle: data.room.ballCycle,
+              pendingThrows: data.room.pendingThrows,
+            });
+          }
+        }
+      } catch (e) {
+        // network retry
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [activeRoom, screen]);
+
   // Sync profile if available
   useEffect(() => {
     if (profile) {
@@ -73,6 +117,30 @@ export default function Home() {
   const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
   const isTeamABatting = currentInnings?.battingTeamId === match.teamA.id;
 
+  // Determine local player and opponent identity (supports both offline AI and online multiplayer)
+  const isHost = activeRoom
+    ? activeRoom.players.find((p) => p.id === myMultiplayerId)?.teamId === 'team_a'
+    : true;
+  const myTeamId = isHost ? 'team_a' : 'team_b';
+
+  const myName = activeRoom
+    ? (isHost ? match.teamA.name : match.teamB.name)
+    : (match.teamA.name === 'Team A' ? 'YOU' : match.teamA.name);
+  const oppName = activeRoom
+    ? (isHost ? match.teamB.name : match.teamA.name)
+    : match.teamB.name;
+
+  const myIsBatting = isHost ? isTeamABatting : !isTeamABatting;
+  const oppIsBatting = !myIsBatting;
+
+  const myThrowReady = isHost ? pendingThrows.teamA !== null : pendingThrows.teamB !== null;
+  const oppThrowReady = isHost ? pendingThrows.teamB !== null : pendingThrows.teamA !== null;
+
+  const myThrowRequired =
+    match.phase === 'toss_throw' ||
+    ((match.phase === 'innings1' || match.phase === 'innings2') &&
+      (isHost ? pendingThrows.teamA === null : pendingThrows.teamB === null));
+
   // Last throws by both sides
   const userLastThrow = lastBallEvent
     ? (isTeamABatting ? lastBallEvent.batterThrow : lastBallEvent.bowlerThrow)
@@ -80,6 +148,90 @@ export default function Home() {
   const oppLastThrow = lastBallEvent
     ? (!isTeamABatting ? lastBallEvent.batterThrow : lastBallEvent.bowlerThrow)
     : null;
+  const oppDisplayedThrow = isHost ? oppLastThrow : userLastThrow;
+
+  // Handlers for Local or Multiplayer Actions
+  const handlePlayerThrow = async (val: ThrowValue) => {
+    if (activeRoom) {
+      const action = match.phase === 'toss_throw' ? 'toss_throw' : 'throw';
+      try {
+        await fetch(`/api/rooms/${activeRoom.code}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, teamId: myTeamId, value: val }),
+        });
+      } catch (e) {
+        // network retry
+      }
+    } else {
+      setPlayerThrow('team_a', val);
+    }
+  };
+
+  const handleCallToss = async (callerTeamId: string, call: TossCall) => {
+    if (activeRoom) {
+      try {
+        await fetch(`/api/rooms/${activeRoom.code}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'toss_call', callerTeamId: myTeamId, call }),
+        });
+      } catch (e) {
+        // network retry
+      }
+    } else {
+      callToss(callerTeamId, call);
+    }
+  };
+
+  const handleChooseToss = async (choice: TossChoice) => {
+    if (activeRoom) {
+      try {
+        await fetch(`/api/rooms/${activeRoom.code}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'toss_choice', choice }),
+        });
+      } catch (e) {
+        // network retry
+      }
+    } else {
+      chooseToss(choice);
+    }
+  };
+
+  const handleStartSecondInnings = async () => {
+    if (activeRoom) {
+      try {
+        await fetch(`/api/rooms/${activeRoom.code}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'start_innings_2' }),
+        });
+      } catch (e) {
+        // network retry
+      }
+    } else {
+      startSecondInnings();
+    }
+  };
+
+  const handlePlayAgain = async () => {
+    if (activeRoom) {
+      try {
+        await fetch(`/api/rooms/${activeRoom.code}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'start' }),
+        });
+      } catch (e) {
+        // network retry
+      }
+    } else {
+      resetMatch();
+      initMatch({ mode: match.mode, format: match.format, opponentType });
+    }
+  };
 
   // Handle Game Start
   function handleStartGame(mode: GameMode, format: GameFormat) {
@@ -103,6 +255,8 @@ export default function Home() {
 
   function handleBackToLanding() {
     resetMatch();
+    setActiveRoom(null);
+    setMyMultiplayerId('');
     setScreen('landing');
     setOpponentChoice(null);
   }
@@ -211,7 +365,7 @@ export default function Home() {
                   if (!profile) {
                     setShowNameModal(true);
                   } else {
-                    setScreen('setup');
+                    setScreen('multiplayer_lobby');
                   }
                 }}
                 className="nb-btn nb-btn--yellow w-full text-base sm:text-lg flex items-center justify-between border-4"
@@ -350,7 +504,7 @@ export default function Home() {
                           const name = playerName.trim() || 'Player';
                           createProfile(name, playerUsername);
                           setShowNameModal(false);
-                          setScreen('setup');
+                          setScreen(opponentChoice === 'friend' ? 'multiplayer_lobby' : 'setup');
                         }
                       }}
                     />
@@ -361,11 +515,11 @@ export default function Home() {
                       const name = playerName.trim() || 'Player';
                       createProfile(name, playerUsername);
                       setShowNameModal(false);
-                      setScreen('setup');
+                      setScreen(opponentChoice === 'friend' ? 'multiplayer_lobby' : 'setup');
                     }}
                     className="w-full py-3 bg-[#e0d6c3] hover:bg-[#d0c6b3] border-3 border-black font-display text-sm font-black text-black uppercase tracking-wider shadow-[3px_3px_0_0_#000] cursor-pointer"
                   >
-                    CREATE
+                    CONTINUE
                   </button>
                 </div>
               </div>
@@ -376,6 +530,31 @@ export default function Home() {
         {/* How to Play Modal */}
         {showHowToPlay && <HowToPlayModal onClose={() => setShowHowToPlay(false)} />}
       </div>
+    );
+  }
+
+  // ===================== MULTIPLAYER LOBBY (WORDLE-STYLE) =====================
+  if (screen === 'multiplayer_lobby') {
+    return (
+      <MultiplayerLobby
+        initialRoomCode={urlRoomCode}
+        playerName={profile?.name || playerName || 'Player'}
+        onStartMatch={(room, playerId) => {
+          setActiveRoom(room);
+          setMyMultiplayerId(playerId);
+          setOpponentType('human');
+          if (room.match) {
+            useGameStore.setState({
+              match: room.match,
+              lastBallEvent: room.lastEvent,
+              ballCycle: room.ballCycle,
+              pendingThrows: room.pendingThrows,
+            });
+          }
+          setScreen('playing');
+        }}
+        onBack={handleBackToLanding}
+      />
     );
   }
 
@@ -514,7 +693,7 @@ export default function Home() {
       </header>
 
       {/* Main Gameplay Screen Area */}
-      <main className="relative z-10 flex-1 flex flex-col justify-between max-w-2xl sm:max-w-3xl md:max-w-[740px] mx-auto w-full min-h-0 py-1">
+      <main className="relative z-10 flex-1 flex flex-col items-center justify-center gap-2 sm:gap-3 max-w-2xl sm:max-w-3xl md:max-w-[760px] mx-auto w-full min-h-0 py-0.5">
         {/* Innings Break Notification Overlay */}
         {match.phase === 'innings_break' && (
           <div className="absolute inset-0 z-30 flex items-center justify-center p-4 bg-black/60">
@@ -531,7 +710,7 @@ export default function Home() {
                 Target → <strong className="font-display text-lg text-[#ff3b30]">{match.target}</strong> runs
               </p>
               <button
-                onClick={startSecondInnings}
+                onClick={handleStartSecondInnings}
                 className="nb-btn nb-btn--lime w-full text-sm border-3"
               >
                 START CHASE →
@@ -543,20 +722,20 @@ export default function Home() {
         {/* 1. Scoreboard (sits on the pitch) */}
         <Scoreboard match={match} lastEvent={lastBallEvent} />
 
-        {/* 2. Side-by-Side Video & Opponent Feeds (Matches Reference Images 1, 4, 5) */}
-        <div className="grid grid-cols-2 gap-2 sm:gap-3 w-full flex-shrink-0">
+        {/* 2. Side-by-Side Video & Opponent Feeds (Significantly enlarged boxes to fill pitch, Matches Ref Image 2) */}
+        <div className="grid grid-cols-2 gap-2 sm:gap-3.5 w-full flex-shrink-0">
           {/* Player 1 (You) Feed */}
-          <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[180px] sm:h-[210px]">
+          <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[260px] sm:h-[290px] md:h-[310px]">
             {/* Yellow window bar */}
             <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2.5 py-1 flex items-center justify-between text-black flex-shrink-0">
               <div className="flex items-center gap-1.5 font-num text-[11px] sm:text-xs font-black uppercase truncate max-w-[140px]">
                 <span className="w-2.5 h-2.5 rounded-full border border-black bg-white inline-block flex-shrink-0" />
-                <span>{match.teamA.name === 'Team A' ? 'YOU' : match.teamA.name}</span>
+                <span>{myName}</span>
                 {match.phase === 'innings1' || match.phase === 'innings2' ? (
-                  <span className="opacity-75">({isTeamABatting ? 'BAT' : 'BOWL'})</span>
+                  <span className="opacity-75">({myIsBatting ? 'BAT' : 'BOWL'})</span>
                 ) : null}
               </div>
-              {pendingThrows.teamA !== null ? (
+              {myThrowReady ? (
                 <span className="font-num text-[9px] px-1.5 py-0.5 bg-[#a3f23d] border border-black font-black">
                   READY
                 </span>
@@ -566,20 +745,17 @@ export default function Home() {
             {/* Webcam Box */}
             <div className="relative w-full flex-1 bg-black min-h-0 overflow-hidden">
               <WebcamHandTracker
-                playerLabel={match.teamA.name}
-                isThrowRequired={
-                  match.phase === 'toss_throw' ||
-                  ((match.phase === 'innings1' || match.phase === 'innings2') && pendingThrows.teamA === null)
-                }
+                playerLabel={myName}
+                isThrowRequired={myThrowRequired}
                 ballCycle={ballCycle}
-                onThrowConfirmed={(val) => setPlayerThrow('team_a', val)}
+                onThrowConfirmed={handlePlayerThrow}
               />
             </div>
           </div>
 
-          {/* Player 2 (Computer / Opponent) Feed (Matches Reference Images 1, 4, 5) */}
-          <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[180px] sm:h-[210px]">
-            {/* Pink window bar with O O O COMPUTER */}
+          {/* Player 2 (Computer / Opponent) Feed */}
+          <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[260px] sm:h-[290px] md:h-[310px]">
+            {/* Pink window bar with O O O COMPUTER / OPPONENT */}
             <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2.5 py-1 flex items-center justify-between text-black flex-shrink-0">
               <div className="flex items-center gap-1.5 font-num text-[11px] sm:text-xs font-black uppercase truncate max-w-[140px]">
                 <div className="flex items-center gap-1">
@@ -587,67 +763,75 @@ export default function Home() {
                   <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
                   <span className="w-2 h-2 rounded-full border border-black bg-white inline-block flex-shrink-0" />
                 </div>
-                <span>{match.teamB.name.toUpperCase()}</span>
+                <span>{oppName.toUpperCase()}</span>
                 {match.phase === 'innings1' || match.phase === 'innings2' ? (
-                  <span className="opacity-75">({!isTeamABatting ? 'BAT' : 'BOWL'})</span>
+                  <span className="opacity-75">({oppIsBatting ? 'BAT' : 'BOWL'})</span>
                 ) : null}
               </div>
-              {pendingThrows.teamB !== null ? (
+              {oppThrowReady ? (
                 <span className="font-num text-[9px] px-1.5 py-0.5 bg-[#a3f23d] border border-black font-black">
                   READY
                 </span>
               ) : null}
             </div>
 
-            {/* Solid Blue Card with White Retro SVG Robot & Move Display (Matches Reference Images 4, 5) */}
+            {/* Solid Blue Card with White Retro SVG Robot & Move Display */}
             <div className="relative w-full flex-1 bg-[#2563eb] border-2 border-black flex flex-col items-center justify-center p-2 text-white min-h-0 select-none overflow-hidden">
-              {/* Retro Robot SVG Icon */}
-              <svg
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                className="w-12 h-12 sm:w-14 sm:h-14 text-white drop-shadow-[2px_2px_0_#000]"
-              >
-                <rect x="11" y="1" width="2" height="3" rx="1" />
-                <circle cx="12" cy="1" r="1.5" />
-                <rect x="4" y="4" width="16" height="10" rx="2" />
-                <rect x="7" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
-                <rect x="14" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
-                <rect x="9" y="11" width="6" height="1.5" rx="0.5" fill="#2563eb" />
-                <rect x="2" y="7" width="2" height="4" rx="1" />
-                <rect x="20" y="7" width="2" height="4" rx="1" />
-                <path d="M5 15h14v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5z" />
-                <rect x="2" y="16" width="2" height="4" rx="1" />
-                <rect x="20" y="16" width="2" height="4" rx="1" />
-              </svg>
+              {activeRoom ? (
+                <div className="flex flex-col items-center justify-center mb-1">
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/20 border-3 border-white flex items-center justify-center mb-1 shadow-[2px_2px_0_#000]">
+                    <Users className="w-9 h-9 sm:w-11 sm:h-11 text-white" />
+                  </div>
+                  <span className="font-num text-xs sm:text-sm font-black uppercase tracking-wider text-white">
+                    {oppName}
+                  </span>
+                </div>
+              ) : (
+                /* Retro Robot SVG Icon */
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  className="w-16 h-16 sm:w-20 sm:h-20 text-white drop-shadow-[2px_2px_0_#000]"
+                >
+                  <rect x="11" y="1" width="2" height="3" rx="1" />
+                  <circle cx="12" cy="1" r="1.5" />
+                  <rect x="4" y="4" width="16" height="10" rx="2" />
+                  <rect x="7" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
+                  <rect x="14" y="7" width="3" height="3" rx="0.5" fill="#2563eb" />
+                  <rect x="9" y="11" width="6" height="1.5" rx="0.5" fill="#2563eb" />
+                  <rect x="2" y="7" width="2" height="4" rx="1" />
+                  <rect x="20" y="7" width="2" height="4" rx="1" />
+                  <path d="M5 15h14v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5z" />
+                  <rect x="2" y="16" width="2" height="4" rx="1" />
+                  <rect x="20" y="16" width="2" height="4" rx="1" />
+                </svg>
+              )}
 
-              {/* Move Number Display Below Robot */}
-              {oppLastThrow !== null || match.phase === 'match_over' ? (
-                <div className="font-display text-4xl sm:text-5xl font-black text-white leading-none mt-1 animate-bounce-in">
-                  {oppLastThrow !== null ? oppLastThrow : 0}
+              {/* Move Number Display Below Robot / Opponent */}
+              {oppDisplayedThrow !== null || match.phase === 'match_over' ? (
+                <div className="font-display text-5xl sm:text-6xl font-black text-white leading-none mt-1 animate-bounce-in drop-shadow-[2px_2px_0_#000]">
+                  {oppDisplayedThrow !== null ? oppDisplayedThrow : 0}
                 </div>
               ) : null}
             </div>
           </div>
         </div>
 
-        {/* 3. Commentary Card (Unified Toss, Commentary, and Match Over - Matches Reference Images 1, 4, 5) */}
+        {/* 3. Commentary Card (Unified Toss, Commentary, and Match Over) */}
         <CommentaryCard
           match={match}
           lastEvent={lastBallEvent}
-          onCallToss={callToss}
-          onChooseToss={chooseToss}
-          onPlayAgain={() => {
-            resetMatch();
-            initMatch({ mode: match.mode, format: match.format, opponentType });
-          }}
+          onCallToss={handleCallToss}
+          onChooseToss={handleChooseToss}
+          onPlayAgain={handlePlayAgain}
           onBackToLanding={handleBackToLanding}
         />
 
         {/* 4. Touch Keyboard Toggle Drawer */}
-        <div className="relative flex justify-end flex-shrink-0">
+        <div className="relative w-full flex justify-end flex-shrink-0">
           <button
             onClick={() => setShowTouchKeyboard(!showTouchKeyboard)}
-            className="bg-white hover:bg-[#ffd60a] border-2 border-black px-2 py-0.5 font-num text-[10px] font-bold text-black shadow-[2px_2px_0_0_#000] flex items-center gap-1.5 cursor-pointer"
+            className="bg-white hover:bg-[#ffd60a] border-2 border-black px-2.5 py-0.5 font-num text-[10px] font-bold text-black shadow-[2px_2px_0_0_#000] flex items-center gap-1.5 cursor-pointer"
           >
             <Keyboard className="w-3 h-3" />
             <span>{showTouchKeyboard ? 'Hide keypad' : 'Touch keypad'}</span>
@@ -666,10 +850,10 @@ export default function Home() {
               </button>
             </div>
             <KeyboardFallback
-              playerLabel={match.teamA.name}
-              selectedThrow={pendingThrows.teamA}
+              playerLabel={myName}
+              selectedThrow={isHost ? pendingThrows.teamA : pendingThrows.teamB}
               onThrow={(val) => {
-                setPlayerThrow('team_a', val);
+                handlePlayerThrow(val);
                 setShowTouchKeyboard(false);
               }}
             />
