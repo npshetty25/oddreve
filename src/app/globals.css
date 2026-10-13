@@ -1,26 +1,90 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --font-heading: 'Syne', sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  background-color: #07090e;
+  color: #f1f5f9;
+  overflow-x: hidden;
+}
+
+.font-heading {
+  font-family: 'Syne', sans-serif;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Cyber-Stadium Cyber-Grid background */
+.stadium-grid {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+}
+
+/* Radial Glows */
+.ambient-glow-cyan {
+  background: radial-gradient(circle at 50% 0%, rgba(6, 182, 212, 0.18) 0%, transparent 60%);
+}
+
+.ambient-glow-purple {
+  background: radial-gradient(circle at 100% 100%, rgba(168, 85, 247, 0.12) 0%, transparent 50%);
+}
+
+/* Glassmorphism Cards with Neon Accent */
+.cyber-card {
+  background: rgba(13, 17, 28, 0.85);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 36px -10px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.cyber-card-glow-cyan {
+  box-shadow: 0 0 25px -5px rgba(6, 182, 212, 0.25), 0 16px 36px -10px rgba(0, 0, 0, 0.6);
+  border-color: rgba(6, 182, 212, 0.4);
+}
+
+.cyber-card-glow-amber {
+  box-shadow: 0 0 25px -5px rgba(245, 158, 11, 0.25), 0 16px 36px -10px rgba(0, 0, 0, 0.6);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+/* Interactive Button Styling */
+.cyber-btn {
+  position: relative;
+  font-weight: 700;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cyber-btn:hover {
+  transform: translateY(-2px);
+}
+
+.cyber-btn:active {
+  transform: translateY(1px);
+}
+
+/* Animated Pulse Ring */
+@keyframes pulse-ring {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 0.4; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Video Mirror */
+.mirror {
+  transform: scaleX(-1);
 }
