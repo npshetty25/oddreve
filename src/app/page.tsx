@@ -193,7 +193,11 @@ export default function Home() {
               <button
                 onClick={() => {
                   setOpponentChoice('friend');
-                  setShowNameModal(true);
+                  if (!profile) {
+                    setShowNameModal(true);
+                  } else {
+                    setScreen('setup');
+                  }
                 }}
                 className="nb-btn nb-btn--yellow w-full text-base sm:text-lg flex items-center justify-between border-4"
               >
@@ -207,7 +211,11 @@ export default function Home() {
               <button
                 onClick={() => {
                   setOpponentChoice('computer');
-                  setShowNameModal(true);
+                  if (!profile) {
+                    setShowNameModal(true);
+                  } else {
+                    setScreen('setup');
+                  }
                 }}
                 className="nb-btn nb-btn--lime w-full text-base sm:text-lg flex items-center justify-between border-4"
               >
@@ -219,18 +227,23 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Profile record pill */}
+            {/* Profile record pill with edit button */}
             {profile && (
               <div className="relative z-10 mt-4 animate-slide-up" style={{ animationDelay: '0.3s' }}>
-                <div className="bg-[var(--bg-secondary)] border-2 border-black px-3 py-1.5 flex items-center gap-2 shadow-[2px_2px_0_0_#000]">
+                <button
+                  onClick={() => setShowNameModal(true)}
+                  className="bg-[var(--bg-secondary)] border-2 border-black px-3 py-1.5 flex items-center gap-2 shadow-[2px_2px_0_0_#000] cursor-pointer hover:bg-[var(--accent-yellow)] transition-colors"
+                  title="Click to edit name"
+                >
                   <span className="w-2 h-2 rounded-full bg-[var(--accent-lime)]" />
                   <span className="font-num text-xs font-bold text-[var(--text-primary)]">
-                    {profile.name}
+                    {profile.name} {profile.username ? `@${profile.username}` : ''}
                   </span>
                   <span className="font-num text-[10px] text-[var(--text-muted)]">
                     ({profile.gamesWon}W / {profile.gamesPlayed}P)
                   </span>
-                </div>
+                  <span className="text-[10px] text-[var(--text-muted)] underline ml-1">Edit</span>
+                </button>
               </div>
             )}
           </div>
