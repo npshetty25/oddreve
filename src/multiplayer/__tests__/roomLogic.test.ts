@@ -118,6 +118,39 @@ describe('1v1 match flow through the room', () => {
   });
 });
 
+describe('re-ball when no clear hand is shown', () => {
+  it('voids the ball for both players, keeps the score, and ignores duplicates', () => {
+    const room = lobby();
+    applyAction(room, { action: 'start', playerId: 'h' });
+    applyAction(room, { action: 'toss_call', playerId: 'h', call: 'odd' });
+    throws(room, { id: 'h', v: 1 }, { id: 'g', v: 2 }, 'toss_throw'); // host wins toss
+    applyAction(room, { action: 'toss_choice', playerId: 'h', choice: 'bat' });
+
+    // host throws, guest shows no clear hand and asks for a re-ball
+    const cycle = room.ballCycle;
+    applyAction(room, { action: 'throw', playerId: 'h', value: 4, cycle });
+    expect(room.pendingThrows.teamA).toBe(4);
+    applyAction(room, { action: 'reball', playerId: 'g', cycle });
+
+    expect(room.pendingThrows).toEqual({ teamA: null, teamB: null });
+    expect(room.ballCycle).toBe(cycle + 1);
+    expect(room.match?.innings1.score).toBe(0);
+    expect(room.match?.innings1.balls).toBe(0);
+    expect(room.reball).toEqual({ count: 1, by: 'Guest' });
+
+    // the host's old throw and a duplicate reball for the old cycle are ignored
+    applyAction(room, { action: 'throw', playerId: 'h', value: 4, cycle });
+    applyAction(room, { action: 'reball', playerId: 'h', cycle });
+    expect(room.pendingThrows.teamA).toBeNull();
+    expect(room.ballCycle).toBe(cycle + 1);
+    expect(room.reball?.count).toBe(1);
+
+    // the next ball plays normally
+    throws(room, { id: 'h', v: 4 }, { id: 'g', v: 2 });
+    expect(room.match?.innings1.score).toBe(4);
+  });
+});
+
 describe('2v2 match flow through the room', () => {
   it('only the active batter and bowler can throw; batter rotates after a wicket', () => {
     const room = lobby('2v2');
