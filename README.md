@@ -83,3 +83,16 @@ Runs 29 tests across:
 - 2v2 rotation and all-out state
 - Vision classifier & stability filtering
 - Multiplayer commitment-reveal cryptography and lobby state transitions
+
+---
+
+## 🌐 Playing with friends (online rooms)
+
+Rooms are created through `/api/rooms`. Where they are stored depends on your host:
+
+| Host | Setup |
+| --- | --- |
+| `npm run dev`, `npm start`, a single VPS/container | Nothing to do - rooms are kept in server memory. |
+| **Vercel / any serverless host** | Rooms must live in shared storage or they vanish between requests. Add a free Upstash Redis (Vercel Marketplace -> Upstash) and set `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (the Vercel KV names `KV_REST_API_URL` / `KV_REST_API_TOKEN` also work). |
+
+Supported online modes: Cricket 1v1, Cricket 2v2, Baseball 1v1, Baseball 2v2 (2v2 needs 4 players; the host starts the match once the room is full).
