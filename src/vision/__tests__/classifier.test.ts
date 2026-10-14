@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyHandGesture, ThrowStabilizer, HandLandmark } from '../classifier';
+import { classifyHandGesture, ThrowStabilizer, GestureSmoother, HandLandmark } from '../classifier';
 
 // Helper to build mock landmarks: wrist at (0.5, 0.8)
 function createMockLandmarks(options: {
@@ -129,5 +129,46 @@ describe('Vision Classifier & Stabilization', () => {
     res = stabilizer.update(2, t0 + 510);
     expect(res.stableValue).toBe(2);
     expect(res.progress).toBe(1);
+  });
+
+  it('reads the same number when the hand is rotated or tilted', () => {
+    const base = createMockLandmarks({ thumbExt: false, indexExt: true, middleExt: true, ringExt: true });
+    for (const deg of [-70, -35, 40, 90, 135]) {
+      const r = (deg * Math.PI) / 180;
+      const rotated = base.map((p) => {
+        const dx = p.x - 0.5;
+        const dy = p.y - 0.8;
+        return {
+          x: 0.5 + dx * Math.cos(r) - dy * Math.sin(r),
+          y: 0.8 + dx * Math.sin(r) + dy * Math.cos(r),
+          z: p.z,
+        };
+      });
+      expect(classifyHandGesture(rotated).fingerCount).toBe(3);
+    }
+  });
+
+  it('does not turn a "2" with a loose thumb into a 3', () => {
+    const lms = createMockLandmarks({ thumbExt: true, indexExt: true, middleExt: true });
+    expect(classifyHandGesture(lms).fingerCount).toBe(2);
+  });
+
+  it('GestureSmoother ignores a brief flicker and passes through only a clear majority', () => {
+    const sm = new GestureSmoother(450, 6, 0.75);
+    let out: number | null = null;
+    // establish 4 with one stray frame of 3 in the middle
+    const seq = [4, 4, 4, 3, 4, 4, 4, 4];
+    seq.forEach((v, i) => {
+      out = sm.push(v as 4 | 3, 1000 + i * 33);
+    });
+    expect(out).toBe(4);
+
+    // a hand that is mid-transition (half 3, half 5) never produces a value
+    const sm2 = new GestureSmoother(450, 6, 0.75);
+    let last: number | null = 1;
+    [3, 5, 3, 5, 3, 5, 3, 5].forEach((v, i) => {
+      last = sm2.push(v as 3 | 5, 2000 + i * 33);
+    });
+    expect(last).toBeNull();
   });
 });

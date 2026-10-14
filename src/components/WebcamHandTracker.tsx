@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
-import { classifyHandGesture, ThrowStabilizer, HandDetectionResult } from '@/vision/classifier';
+import { classifyHandGesture, ThrowStabilizer, GestureSmoother, HandDetectionResult } from '@/vision/classifier';
 import { ThrowValue } from '@/engine/types';
 import { AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
 
@@ -43,7 +43,8 @@ export function WebcamHandTracker({
   // References for timing, cooldown, and single fire per ball
   const hasFiredRef = useRef(false);
   // Responsive hold duration: 320ms for fast, natural recognition
-  const stabilizerRef = useRef(new ThrowStabilizer(320));
+  const stabilizerRef = useRef(new ThrowStabilizer(250));
+  const smootherRef = useRef(new GestureSmoother());
   const animationFrameId = useRef<number | null>(null);
   const lastProcessedTime = useRef<number>(0);
   const lastFiredTime = useRef<number>(0);
@@ -96,9 +97,9 @@ export function WebcamHandTracker({
               },
               runningMode: 'VIDEO',
               numHands: 1,
-              minHandDetectionConfidence: 0.3,
-              minHandPresenceConfidence: 0.3,
-              minTrackingConfidence: 0.3,
+              minHandDetectionConfidence: 0.5,
+              minHandPresenceConfidence: 0.5,
+              minTrackingConfidence: 0.5,
             });
             if (handLandmarker) {
               console.log(`HandLandmarker initialized successfully with ${modelPath} (${delegate})`);
@@ -256,7 +257,10 @@ export function WebcamHandTracker({
                 }
 
                 // Classify gesture
-                const classified = classifyHandGesture(rawLandmarks, confidence);
+                // World landmarks are metric 3D, so finger angles are not skewed by the video aspect ratio
+                const worldLandmarks = results.worldLandmarks?.[0];
+                const classified = classifyHandGesture(worldLandmarks ?? rawLandmarks, confidence);
+                const smoothed = smootherRef.current.push(classified.fingerCount, Date.now());
                 setDetection(classified);
 
                 // Stabilization & Throw detection: valid throws are 1 to 6
@@ -266,11 +270,11 @@ export function WebcamHandTracker({
                   isThrowRequired &&
                   !hasFiredRef.current &&
                   isCooldownDone &&
-                  classified.fingerCount !== null &&
-                  classified.fingerCount >= 1 &&
-                  classified.fingerCount <= 6
+                  smoothed !== null &&
+                  smoothed >= 1 &&
+                  smoothed <= 6
                 ) {
-                  const stable = stabilizerRef.current.update(classified.fingerCount, Date.now());
+                  const stable = stabilizerRef.current.update(smoothed, Date.now());
                   setHoldProgress(stable.progress);
 
                   if (stable.stableValue !== null) {
@@ -280,7 +284,7 @@ export function WebcamHandTracker({
                     onThrowConfirmed(stable.stableValue);
                     stabilizerRef.current.reset();
                   }
-                } else if (!isThrowRequired || !isCooldownDone) {
+                } else if (!isThrowRequired || !isCooldownDone || smoothed === null) {
                   stabilizerRef.current.reset();
                   setHoldProgress(0);
                 }
@@ -292,6 +296,7 @@ export function WebcamHandTracker({
                   label: 'No hand detected',
                 });
                 stabilizerRef.current.reset();
+                smootherRef.current.reset();
                 setHoldProgress(0);
               }
             }
@@ -319,6 +324,7 @@ export function WebcamHandTracker({
     hasFiredRef.current = false;
     setConfirmedValue(null);
     stabilizerRef.current.reset();
+    smootherRef.current.reset();
     setHoldProgress(0);
   }, [ballCycle, isThrowRequired]);
 
