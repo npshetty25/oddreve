@@ -103,7 +103,7 @@ export function CommentaryCard({
         </h3>
         <p className="font-body text-xs sm:text-sm text-black">
           {match.toss.callerTeamId === myTeam.id ? 'You' : oppTeam.name} called{' '}
-          <strong>{match.toss.call.toUpperCase()}</strong>. Hand up in frame — show 1 to 6 fingers to throw.
+          <strong>{match.toss.call.toUpperCase()}</strong>. Hand up in frame — show 0 to 6 on the 3-2-1.
         </p>
       </div>
     );
@@ -280,8 +280,8 @@ export function CommentaryCard({
         </h3>
         <p className="font-body text-xs sm:text-sm text-black">
           {isBaseball
-            ? 'Show 1 to 6 fingers. Diff of 1 = Strike! 3 Strikes = Out! Equal throw = Double!'
-            : 'Show 1 to 6 fingers at camera to lock your throw.'}
+            ? 'Show 0 to 6 on the 3-2-1. Diff of 1 = Strike! 3 Strikes = Out! Equal throw = Double!'
+            : 'Show 0 to 6 fingers to the camera on the 3-2-1.'}
         </p>
       </div>
     );
