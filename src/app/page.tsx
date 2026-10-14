@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useGameStore } from '@/store/useGameStore';
 import { useTheme } from '@/store/useTheme';
 import { usePlayerProfile } from '@/store/usePlayerProfile';
@@ -28,6 +28,33 @@ import {
 type AppScreen = 'landing' | 'setup' | 'playing';
 type OpponentChoice = 'friend' | 'computer';
 
+const SESSION_KEY = 'oddoreve-room-session';
+const POLL_MS = 700;
+const DISCONNECT_AFTER_MS = 15000;
+
+interface RoomSession {
+  code: string;
+  playerId: string;
+}
+
+function loadSession(): RoomSession | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as RoomSession) : null;
+  } catch {
+    return null;
+  }
+}
+function saveSession(s: RoomSession | null) {
+  try {
+    if (s) sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
+    else sessionStorage.removeItem(SESSION_KEY);
+  } catch {}
+}
+function newPlayerId() {
+  return `p_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export default function Home() {
   const {
     match,
@@ -47,9 +74,10 @@ export default function Home() {
   const { theme, toggleTheme } = useTheme();
   const { profile, initProfile, createProfile, recordGame } = usePlayerProfile();
 
-  // Initialize profile from local storage on mount
+  const [profileReady, setProfileReady] = useState(false);
   useEffect(() => {
     initProfile();
+    setProfileReady(true);
   }, [initProfile]);
 
   const [screen, setScreen] = useState<AppScreen>('landing');
@@ -60,14 +88,21 @@ export default function Home() {
   const [showNameModal, setShowNameModal] = useState(false);
   const [showTouchKeyboard, setShowTouchKeyboard] = useState(false);
 
-  // Online Multiplayer State
+  // Online multiplayer state
   const [activeRoom, setActiveRoom] = useState<ServerRoom | null>(null);
   const [myMultiplayerId, setMyMultiplayerId] = useState<string>('');
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [isJoiningRoom, setIsJoiningRoom] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [roomNotice, setRoomNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [ballCooldownRemaining, setBallCooldownRemaining] = useState(0);
+  const [disconnectedNames, setDisconnectedNames] = useState<string[]>([]);
+  const [pendingRoomCode, setPendingRoomCode] = useState<string | null>(null);
+
+  const lastVersionRef = useRef(0);
+  const roomCodeRef = useRef<string | null>(null);
+  const playerIdRef = useRef('');
 
   // Give both players three seconds to see the result before the next ball.
   useEffect(() => {
@@ -86,44 +121,128 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [ballCycle, lastBallEvent?.ballNumber, match.phase]);
 
-  // Auto-detect URL ?room=code on mount and jump straight into match
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const roomCode = params.get('room');
-      if (roomCode) {
-        handleJoinFriendMatch(roomCode.trim().toLowerCase());
-      }
+  /* ---------- online room plumbing ---------- */
+
+  // Push a server room snapshot into local React/zustand state (only when it actually changed).
+  const applyRoom = useCallback((room: ServerRoom, serverTime?: number) => {
+    if (serverTime) {
+      const gone = room.players
+        .filter((p) => p.id !== playerIdRef.current && serverTime - p.lastSeen > DISCONNECT_AFTER_MS)
+        .map((p) => p.name);
+      setDisconnectedNames((prev) =>
+        prev.length === gone.length && prev.every((n, i) => n === gone[i]) ? prev : gone
+      );
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (room.version === lastVersionRef.current && roomCodeRef.current === room.code) return;
+    lastVersionRef.current = room.version;
+    roomCodeRef.current = room.code;
+    setActiveRoom(room);
+    if (room.match) {
+      useGameStore.setState({
+        match: room.match,
+        lastBallEvent: room.lastEvent,
+        ballCycle: room.ballCycle,
+        pendingThrows: room.pendingThrows,
+        opponentType: 'human',
+      });
+    }
   }, []);
 
-  // Sync online room state every 500ms when playing in a multiplayer room
+  const leaveRoomLocally = useCallback(() => {
+    saveSession(null);
+    roomCodeRef.current = null;
+    playerIdRef.current = '';
+    lastVersionRef.current = 0;
+    setActiveRoom(null);
+    setMyMultiplayerId('');
+    setDisconnectedNames([]);
+  }, []);
+
+  // Poll the room (also acts as heartbeat)
   useEffect(() => {
-    if (!activeRoom || screen !== 'playing') return;
+    if (!activeRoom?.code || !myMultiplayerId || screen !== 'playing') return;
+    const code = activeRoom.code;
+    let cancelled = false;
+    let inFlight = false;
 
-    const interval = setInterval(async () => {
+    const tick = async () => {
+      if (inFlight || cancelled) return;
+      inFlight = true;
       try {
-        const res = await fetch(`/api/rooms/${activeRoom.code}`);
-        const data = await res.json();
-        if (data.success && data.room) {
-          setActiveRoom(data.room);
-          if (data.room.match) {
-            useGameStore.setState({
-              match: data.room.match,
-              lastBallEvent: data.room.lastEvent,
-              ballCycle: data.room.ballCycle,
-              pendingThrows: data.room.pendingThrows,
-            });
-          }
+        const res = await fetch(`/api/rooms/${code}?playerId=${encodeURIComponent(myMultiplayerId)}`, {
+          cache: 'no-store',
+        });
+        if (cancelled) return;
+        if (res.status === 404) {
+          leaveRoomLocally();
+          setScreen('landing');
+          setJoinError('This room has closed or expired. Start a new one.');
+          return;
         }
-      } catch (e) {
-        // network retry
+        const data = await res.json();
+        if (data.success && data.room) applyRoom(data.room, data.serverTime);
+      } catch {
+        // transient network error: next tick retries
+      } finally {
+        inFlight = false;
       }
-    }, 500);
+    };
 
-    return () => clearInterval(interval);
-  }, [activeRoom, screen]);
+    const id = setInterval(tick, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [activeRoom?.code, myMultiplayerId, screen, applyRoom, leaveRoomLocally]);
+
+  // Send a game action to the room. The response is applied immediately for snappy UI.
+  const sendAction = useCallback(
+    async (body: Record<string, unknown>) => {
+      const code = roomCodeRef.current;
+      if (!code) return;
+      try {
+        const res = await fetch(`/api/rooms/${code}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, playerId: playerIdRef.current }),
+        });
+        const data = await res.json();
+        if (data.room) applyRoom(data.room, data.serverTime);
+        if (!data.success) {
+          setRoomNotice(data.error || 'Something went wrong');
+          setTimeout(() => setRoomNotice(null), 3500);
+        }
+      } catch {
+        setRoomNotice('Connection problem - retrying...');
+        setTimeout(() => setRoomNotice(null), 3500);
+      }
+    },
+    [applyRoom]
+  );
+
+  // Remember ?room= and any previous session on first load
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('room')?.trim().toLowerCase() || null;
+    const session = loadSession();
+    const code = fromUrl || session?.code || null;
+    if (code) setPendingRoomCode(code);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingRoomCode || !profileReady || activeRoom) return;
+    const p = usePlayerProfile.getState().profile;
+    if (!p) {
+      // need a name first; the name modal continues the join
+      setOpponentChoice('friend');
+      setShowNameModal(true);
+      return;
+    }
+    const code = pendingRoomCode;
+    setPendingRoomCode(null);
+    handleJoinFriendMatch(code, p.name);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRoomCode, profileReady]);
 
   // Sync profile if available
   useEffect(() => {
@@ -133,54 +252,72 @@ export default function Home() {
     }
   }, [profile?.name, profile?.username]);
 
-  // Record game outcome when match ends
-  useEffect(() => {
-    if (match.phase === 'match_over' && match.result) {
-      const isUserWin = match.result.winnerTeamId === match.teamA.id;
-      recordGame(isUserWin);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [match.phase, match.result, match.teamA.id]);
+  /* ---------- derived view-model ---------- */
+
+  const myPlayer = activeRoom?.players.find((p) => p.id === myMultiplayerId);
+  const myTeamId: 'team_a' | 'team_b' = myPlayer?.teamId ?? 'team_a';
+  const mySlot = myPlayer?.slot ?? 0;
+  const myTeam = myTeamId === 'team_a' ? match.teamA : match.teamB;
+  const oppTeam = myTeamId === 'team_a' ? match.teamB : match.teamA;
+  const myKey = myTeamId === 'team_a' ? 'teamA' : 'teamB';
+  const oppKey = myTeamId === 'team_a' ? 'teamB' : 'teamA';
 
   const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
-  const isTeamABatting = currentInnings?.battingTeamId === match.teamA.id;
   const isBaseball = match.mode === 'baseball';
   const is2v2 = match.format === '2v2';
+  const isInnings = match.phase === 'innings1' || match.phase === 'innings2';
 
-  // Determine local player and opponent identity
-  const isHost = activeRoom
-    ? activeRoom.players.find((p) => p.id === myMultiplayerId)?.teamId === 'team_a'
-    : true;
-  const myTeamId = isHost ? 'team_a' : 'team_b';
+  // Record game outcome once when the match ends
+  const recordedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (match.phase !== 'match_over' || !match.result) {
+      recordedKeyRef.current = null;
+      return;
+    }
+    const key = `${match.ballHistory.length}:${match.result.marginText}`;
+    if (recordedKeyRef.current === key) return;
+    recordedKeyRef.current = key;
+    recordGame(match.result.winnerTeamId === myTeam.id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match.phase, match.result?.marginText, match.ballHistory.length, myTeam.id]);
 
   const myName = activeRoom
-    ? (isHost ? match.teamA.name : match.teamB.name)
-    : (match.teamA.name === 'Team A' ? 'YOU' : match.teamA.name);
+    ? myPlayer?.name || 'YOU'
+    : match.teamA.name === 'Team A'
+    ? 'YOU'
+    : match.teamA.name;
   const oppName = activeRoom
-    ? (isHost ? match.teamB.name : match.teamA.name)
+    ? is2v2
+      ? oppTeam.name
+      : oppTeam.players[0]?.name || oppTeam.name
     : match.teamB.name;
 
-  const myIsBatting = isHost ? isTeamABatting : !isTeamABatting;
-  const oppIsBatting = !myIsBatting;
+  const myTeamBatting = currentInnings?.battingTeamId === myTeam.id;
+  const myIsBatting = myTeamBatting;
+  const oppIsBatting = !myTeamBatting && isInnings;
 
-  const myThrowReady = isHost ? pendingThrows.teamA !== null : pendingThrows.teamB !== null;
-  const oppThrowReady = isHost ? pendingThrows.teamB !== null : pendingThrows.teamA !== null;
+  // Which slot of a team throws right now (2v2 rotates batters/bowlers; toss uses captains)
+  const activeSlotOf = (team: typeof match.teamA): number => {
+    if (!is2v2 || !isInnings || !currentInnings) return 0;
+    const id =
+      currentInnings.battingTeamId === team.id ? currentInnings.activeBatterId : currentInnings.activeBowlerId;
+    return Math.max(0, team.players.findIndex((p) => p.id === id));
+  };
+  const iAmActive = !activeRoom || !is2v2 || activeSlotOf(myTeam) === mySlot;
+  const isCaptain = !activeRoom || !is2v2 || mySlot === 0;
+
+  const myThrowReady = pendingThrows[myKey] !== null;
+  const oppThrowReady = pendingThrows[oppKey] !== null;
   const isBallCooldown = ballCooldownRemaining > 0;
 
   const myThrowRequired =
-    match.phase === 'toss_throw' ||
-    ((match.phase === 'innings1' || match.phase === 'innings2') &&
-      !isBallCooldown &&
-      (isHost ? pendingThrows.teamA === null : pendingThrows.teamB === null));
+    iAmActive && !myThrowReady && (match.phase === 'toss_throw' || (isInnings && !isBallCooldown));
 
-  // Last throws by both sides
-  const userLastThrow = lastBallEvent
-    ? (isTeamABatting ? lastBallEvent.batterThrow : lastBallEvent.bowlerThrow)
+  const oppDisplayedThrow = lastBallEvent
+    ? myTeamBatting
+      ? lastBallEvent.bowlerThrow
+      : lastBallEvent.batterThrow
     : null;
-  const oppLastThrow = lastBallEvent
-    ? (!isTeamABatting ? lastBallEvent.batterThrow : lastBallEvent.bowlerThrow)
-    : null;
-  const oppDisplayedThrow = isHost ? oppLastThrow : userLastThrow;
 
   // Copy shareable link
   const handleCopyInviteLink = () => {
@@ -191,90 +328,47 @@ export default function Home() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Handlers for Local or Multiplayer Actions
-  const handlePlayerThrow = async (val: ThrowValue) => {
-    if (isBallCooldown) return;
+  /* ---------- handlers (local or online) ---------- */
 
+  const handlePlayerThrow = async (val: ThrowValue) => {
+    if (isBallCooldown || !iAmActive || val < 1) return;
     if (activeRoom) {
-      const action = match.phase === 'toss_throw' ? 'toss_throw' : 'throw';
-      try {
-        await fetch(`/api/rooms/${activeRoom.code}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, teamId: myTeamId, value: val }),
-        });
-      } catch (e) {
-        // network retry
-      }
+      if (myThrowReady) return;
+      await sendAction({
+        action: match.phase === 'toss_throw' ? 'toss_throw' : 'throw',
+        value: val,
+        cycle: ballCycle,
+      });
     } else {
       setPlayerThrow('team_a', val);
     }
   };
 
   const handleCallToss = async (callerTeamId: string, call: TossCall) => {
-    if (activeRoom) {
-      try {
-        await fetch(`/api/rooms/${activeRoom.code}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'toss_call', callerTeamId: myTeamId, call }),
-        });
-      } catch (e) {
-        // network retry
-      }
-    } else {
-      callToss(callerTeamId, call);
-    }
+    if (activeRoom) await sendAction({ action: 'toss_call', call });
+    else callToss(callerTeamId, call);
   };
 
   const handleChooseToss = async (choice: TossChoice) => {
-    if (activeRoom) {
-      try {
-        await fetch(`/api/rooms/${activeRoom.code}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'toss_choice', choice }),
-        });
-      } catch (e) {
-        // network retry
-      }
-    } else {
-      chooseToss(choice);
-    }
+    if (activeRoom) await sendAction({ action: 'toss_choice', choice });
+    else chooseToss(choice);
   };
 
   const handleStartSecondInnings = async () => {
-    if (activeRoom) {
-      try {
-        await fetch(`/api/rooms/${activeRoom.code}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'start_innings_2' }),
-        });
-      } catch (e) {
-        // network retry
-      }
-    } else {
-      startSecondInnings();
-    }
+    if (activeRoom) await sendAction({ action: 'start_innings_2' });
+    else startSecondInnings();
   };
 
   const handlePlayAgain = async () => {
     if (activeRoom) {
-      try {
-        await fetch(`/api/rooms/${activeRoom.code}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'start' }),
-        });
-      } catch (e) {
-        // network retry
-      }
+      await sendAction({ action: 'reset' });
     } else {
       resetMatch();
       initMatch({ mode: match.mode, format: match.format, opponentType });
     }
   };
+
+  const handleStartRoomMatch = () => sendAction({ action: 'start' });
 
   // Start Offline / Computer Game
   function handleStartComputerGame(mode: GameMode, format: GameFormat) {
@@ -293,7 +387,7 @@ export default function Home() {
     setScreen('playing');
   }
 
-  // Create Room & jump straight into match screen
+  // Create a room and wait for friends in the lobby
   async function handleCreateFriendRoom(mode: GameMode, format: GameFormat) {
     const name = playerName.trim() || profile?.name || 'You';
     if (!profile) {
@@ -308,27 +402,23 @@ export default function Home() {
       });
       const data = await res.json();
       if (data.success && data.room) {
-        setActiveRoom(data.room);
+        playerIdRef.current = data.playerId;
+        saveSession({ code: data.room.code, playerId: data.playerId });
         setMyMultiplayerId(data.playerId);
         setOpponentType('human');
-        initMatch({
-          mode,
-          format,
-          teamAName: name,
-          teamBName: 'Waiting for friend...',
-          opponentType: 'human',
-        });
+        lastVersionRef.current = 0;
+        applyRoom(data.room);
         setScreen('playing');
       } else {
         setJoinError(data.error || 'Failed to create room');
       }
-    } catch (err: any) {
-      setJoinError(err.message || 'Network error');
+    } catch (err) {
+      setJoinError(err instanceof Error ? err.message : 'Network error');
     }
   }
 
-  // Join Existing Room
-  async function handleJoinFriendMatch(code: string) {
+  // Join (or rejoin) an existing room
+  async function handleJoinFriendMatch(code: string, nameOverride?: string) {
     const trimmed = code.trim().toLowerCase();
     if (!trimmed) {
       setJoinError('Please enter a room code');
@@ -336,9 +426,10 @@ export default function Home() {
     }
     setIsJoiningRoom(true);
     setJoinError(null);
-    const name = playerName.trim() || profile?.name || 'Friend';
+    const name = nameOverride || playerName.trim() || profile?.name || 'Friend';
     try {
-      const playerId = `player_${Date.now().toString(36)}`;
+      const session = loadSession();
+      const playerId = session?.code === trimmed ? session.playerId : newPlayerId();
       const res = await fetch(`/api/rooms/${trimmed}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -346,42 +437,38 @@ export default function Home() {
       });
       const data = await res.json();
       if (data.success && data.room) {
-        setActiveRoom(data.room);
-        setMyMultiplayerId(data.playerId || playerId);
+        playerIdRef.current = playerId;
+        saveSession({ code: trimmed, playerId });
+        setMyMultiplayerId(playerId);
         setOpponentType('human');
-        initMatch({
-          mode: data.room.mode,
-          format: data.room.format,
-          teamAName: data.room.players[0]?.name || 'Player 1',
-          teamBName: name,
-          opponentType: 'human',
-        });
-        if (data.room.match) {
-          useGameStore.setState({
-            match: data.room.match,
-            lastBallEvent: data.room.lastEvent,
-            ballCycle: data.room.ballCycle,
-            pendingThrows: data.room.pendingThrows,
-          });
-        }
+        lastVersionRef.current = 0;
+        applyRoom(data.room, data.serverTime);
         setScreen('playing');
       } else {
+        if (res.status === 404) saveSession(null);
         setJoinError(data.error || 'Room not found or full');
+        setScreen((s) => (s === 'landing' ? 'setup' : s));
+        setOpponentChoice('friend');
       }
-    } catch (err: any) {
-      setJoinError(err.message || 'Failed to join room');
+    } catch (err) {
+      setJoinError(err instanceof Error ? err.message : 'Failed to join room');
     } finally {
       setIsJoiningRoom(false);
     }
   }
 
   function handleBackToLanding() {
+    if (activeRoom && roomCodeRef.current) {
+      void sendAction({ action: 'leave' });
+    }
+    leaveRoomLocally();
     resetMatch();
-    setActiveRoom(null);
-    setMyMultiplayerId('');
     setScreen('landing');
     setOpponentChoice(null);
     setJoinError(null);
+    try {
+      if (window.location.search) window.history.replaceState({}, '', window.location.pathname);
+    } catch {}
   }
 
   // ===================== LANDING PAGE =====================
@@ -556,9 +643,15 @@ export default function Home() {
               />
               <button
                 onClick={() => {
-                  createProfile(playerName.trim() || 'Player', playerUsername);
+                  const saved = createProfile(playerName.trim() || 'Player', playerUsername);
                   setShowNameModal(false);
-                  if (opponentChoice) setScreen('setup');
+                  if (pendingRoomCode) {
+                    const code = pendingRoomCode;
+                    setPendingRoomCode(null);
+                    handleJoinFriendMatch(code, saved.name);
+                  } else if (opponentChoice) {
+                    setScreen('setup');
+                  }
                 }}
                 className="nb-btn nb-btn--lime w-full text-sm border-3"
               >
@@ -726,6 +819,22 @@ export default function Home() {
     );
   }
 
+  // ===================== ROOM LOBBY (online, before the match starts) =====================
+  if (activeRoom && activeRoom.stage === 'lobby') {
+    return (
+      <RoomLobby
+        room={activeRoom}
+        myPlayerId={myMultiplayerId}
+        copied={copied}
+        notice={roomNotice}
+        disconnectedNames={disconnectedNames}
+        onCopy={handleCopyInviteLink}
+        onStart={handleStartRoomMatch}
+        onLeave={handleBackToLanding}
+      />
+    );
+  }
+
   // ===================== PLAYING / GAME SCREEN =====================
   // Full-width stadium layout with zero side gaps & zero vertical scrolling
   return (
@@ -803,6 +912,21 @@ export default function Home() {
         </div>
       </header>
 
+      {(disconnectedNames.length > 0 || roomNotice) && (
+        <div className="relative z-20 max-w-5xl mx-auto w-full flex-shrink-0">
+          {disconnectedNames.length > 0 && (
+            <div className="bg-[#ff3b30] text-white border-2 border-black px-3 py-1 font-num text-[11px] font-black uppercase">
+              ⚠ {disconnectedNames.join(', ')} seems disconnected. Waiting for them to come back...
+            </div>
+          )}
+          {roomNotice && (
+            <div className="bg-[#ffd60a] text-black border-2 border-black px-3 py-1 font-num text-[11px] font-black">
+              {roomNotice}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Main Gameplay Screen Area */}
       <main className="relative z-10 flex-1 flex flex-col items-center justify-between gap-1.5 sm:gap-2 max-w-5xl mx-auto w-full min-h-0 py-0.5">
         {/* Innings Break Notification Overlay */}
@@ -831,7 +955,7 @@ export default function Home() {
         )}
 
         {/* 1. Scoreboard */}
-        <Scoreboard match={match} lastEvent={lastBallEvent} />
+        <Scoreboard match={match} lastEvent={lastBallEvent} myTeamId={myTeamId} />
 
         {/* Ball History Strip */}
         {match.ballHistory.length > 0 && (
@@ -865,101 +989,91 @@ export default function Home() {
 
         {/* 2. Feeds: 4 boxes in 2v2 mode, or 2 large boxes in 1v1 mode */}
         {is2v2 ? (
-          /* 2v2: 4 boxes in a 2x2 grid */
-          <div className="grid grid-cols-2 gap-2 sm:gap-3 w-full flex-shrink-0">
-            {/* Box 1: You (Camera) - Top Left */}
-            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[300px] sm:h-[360px] md:h-[420px]">
-              <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
-                <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
-                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
-                  <span>{myName} (YOU)</span>
-                  <span className="opacity-75">[{myIsBatting ? 'BAT' : isBaseball ? 'PITCH' : 'BOWL'}]</span>
-                </div>
-                {myThrowReady && (
-                  <span className="font-num text-[9px] px-1 bg-[#a3f23d] border border-black font-black">READY</span>
-                )}
-              </div>
-              <div className="relative w-full flex-1 bg-black min-h-0 overflow-hidden">
-                <WebcamHandTracker
-                  playerLabel={myName}
-                  isThrowRequired={myThrowRequired}
-                  ballCycle={ballCycle}
-                  cooldownRemaining={ballCooldownRemaining}
-                  onThrowConfirmed={handlePlayerThrow}
-                />
-              </div>
-            </div>
-
-            {/* Box 2: Opponent 1 - Top Right */}
-            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[300px] sm:h-[360px] md:h-[420px]">
-              <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
-                <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
-                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
-                  <span>{oppName.toUpperCase()} 1</span>
-                  <span className="opacity-75">[{oppIsBatting ? 'BAT' : isBaseball ? 'PITCH' : 'BOWL'}]</span>
-                </div>
-                {oppThrowReady && (
-                  <span className="font-num text-[9px] px-1 bg-[#a3f23d] border border-black font-black">READY</span>
-                )}
-              </div>
-              <div className="relative w-full flex-1 bg-[#2563eb] border-2 border-black flex flex-col items-center justify-center p-2 text-white min-h-0 select-none overflow-hidden">
-                {activeRoom && activeRoom.players.length < 2 ? (
-                  <div className="flex flex-col items-center justify-center text-center">
-                    <span className="font-num text-[11px] font-black text-[#ffd60a]">WAITING FOR FRIEND...</span>
-                    <button
-                      onClick={handleCopyInviteLink}
-                      className="mt-1 px-2 py-0.5 bg-[#ffd60a] text-black font-num text-[10px] font-bold border border-black cursor-pointer"
-                    >
-                      {copied ? 'COPIED!' : 'COPY LINK'}
-                    </button>
+          /* 2v2: me (camera) + teammate + two opponents */
+          (() => {
+            const myP = myTeam.players[mySlot] ?? myTeam.players[0];
+            const mateP = myTeam.players.find((p) => p.id !== myP?.id);
+            const opp1 = oppTeam.players[0];
+            const opp2 = oppTeam.players[1];
+            const batterId = currentInnings?.activeBatterId;
+            const bowlerId = currentInnings?.activeBowlerId;
+            const roleOf = (id?: string) =>
+              !isInnings ? '' : id === batterId ? 'BAT' : id === bowlerId ? (isBaseball ? 'PITCH' : 'BOWL') : 'ON DECK';
+            const lastThrowOf = (id?: string) =>
+              lastBallEvent && id && (lastBallEvent.batterId === id || lastBallEvent.bowlerId === id)
+                ? id === lastBallEvent.batterId
+                  ? lastBallEvent.batterThrow
+                  : lastBallEvent.bowlerThrow
+                : null;
+            const tile = (
+              p: typeof opp1 | undefined,
+              color: string,
+              bg: string,
+              label: string,
+              ready: boolean
+            ) => {
+              const role = roleOf(p?.id);
+              const thrown = lastThrowOf(p?.id);
+              return (
+                <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[140px] sm:h-[170px] md:h-[190px]">
+                  <div className={`${color} border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0`}>
+                    <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
+                      <span>{(p?.name || label).toUpperCase()}</span>
+                      {role && <span className="opacity-75">[{role}]</span>}
+                    </div>
+                    {ready && role && role !== 'ON DECK' && (
+                      <span className="font-num text-[9px] px-1 bg-[#a3f23d] border border-black font-black">READY</span>
+                    )}
                   </div>
-                ) : (
-                  <>
-                    <Bot className="w-8 h-8 text-white drop-shadow-[1px_1px_0_#000]" />
-                    {oppDisplayedThrow !== null && (
-                      <div className="font-display text-3xl font-black text-white leading-none mt-0.5 drop-shadow-[2px_2px_0_#000]">
-                        {oppDisplayedThrow}
+                  <div className={`relative w-full flex-1 ${bg} flex flex-col items-center justify-center p-2 text-white min-h-0 select-none`}>
+                    {p?.isOut ? (
+                      <span className="font-display text-xl text-[#ff6b6b]">OUT</span>
+                    ) : thrown !== null ? (
+                      <span className="font-display text-4xl font-black drop-shadow-[2px_2px_0_#000]">{thrown}</span>
+                    ) : (
+                      <Users className="w-7 h-7 text-white/80" />
+                    )}
+                    <span className="font-num text-[10px] text-white/70 uppercase mt-1">
+                      {p?.isOut ? 'dismissed' : `${p?.runs ?? 0} runs`}
+                    </span>
+                  </div>
+                </div>
+              );
+            };
+            return (
+              <div className="grid grid-cols-2 gap-2 sm:gap-3 w-full flex-shrink-0">
+                {/* Me (camera) spans both rows on the left */}
+                <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[300px] sm:h-[364px] md:h-[404px] row-span-2">
+                  <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
+                    <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
+                      <span>{myName} (YOU)</span>
+                      {roleOf(myP?.id) && <span className="opacity-75">[{roleOf(myP?.id)}]</span>}
+                    </div>
+                    {myThrowReady && (
+                      <span className="font-num text-[9px] px-1 bg-[#a3f23d] border border-black font-black">READY</span>
+                    )}
+                  </div>
+                  <div className="relative w-full flex-1 bg-black min-h-0 overflow-hidden">
+                    <WebcamHandTracker
+                      playerLabel={myName}
+                      isThrowRequired={myThrowRequired}
+                      ballCycle={ballCycle}
+                      cooldownRemaining={ballCooldownRemaining}
+                      onThrowConfirmed={handlePlayerThrow}
+                    />
+                    {isInnings && !iAmActive && (
+                      <div className="absolute inset-x-0 bottom-0 bg-black/70 text-center text-[11px] font-num font-black uppercase text-white py-1">
+                        Not your ball - cheer on your teammate
                       </div>
                     )}
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Box 3: Teammate (Player A2) - Bottom Left */}
-            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[300px] sm:h-[360px] md:h-[420px]">
-              <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
-                <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
-                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
-                  <span>{match.teamA.players[1]?.name || 'TEAMMATE'}</span>
-                  <span className="opacity-75">[PARTNER]</span>
+                  </div>
                 </div>
+                {tile(opp1, 'bg-[#ff6fb5]', 'bg-[#2563eb]', 'OPPONENT 1', oppThrowReady)}
+                {tile(opp2, 'bg-[#ff6fb5]', 'bg-[#1e3a8a]', 'OPPONENT 2', oppThrowReady)}
+                {tile(mateP, 'bg-[#a3f23d]', 'bg-[#1e293b]', 'TEAMMATE', myThrowReady)}
               </div>
-              <div className="relative w-full flex-1 bg-[#1e293b] flex flex-col items-center justify-center p-2 text-white min-h-0 select-none">
-                <Users className="w-8 h-8 text-[#a3f23d] drop-shadow-[1px_1px_0_#000]" />
-                <span className="font-num text-[10px] text-white/70 uppercase mt-1">
-                  {match.teamA.players[1]?.isOut ? '❌ OUT' : 'ON DECK'}
-                </span>
-              </div>
-            </div>
-
-            {/* Box 4: Opponent 2 (Player B2) - Bottom Right */}
-            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[300px] sm:h-[360px] md:h-[420px]">
-              <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
-                <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
-                  <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
-                  <span>{match.teamB.players[1]?.name || 'OPPONENT 2'}</span>
-                  <span className="opacity-75">[PARTNER]</span>
-                </div>
-              </div>
-              <div className="relative w-full flex-1 bg-[#1e3a8a] flex flex-col items-center justify-center p-2 text-white min-h-0 select-none">
-                <Users className="w-8 h-8 text-[#ffd60a] drop-shadow-[1px_1px_0_#000]" />
-                <span className="font-num text-[10px] text-white/70 uppercase mt-1">
-                  {match.teamB.players[1]?.isOut ? '❌ OUT' : 'ON DECK'}
-                </span>
-              </div>
-            </div>
-          </div>
+            );
+          })()
         ) : (
           /* 1v1: 2 large side-by-side feeds */
           <div className="grid grid-cols-2 gap-2 sm:gap-3 w-full flex-shrink-0">
@@ -1095,6 +1209,8 @@ export default function Home() {
           onChooseToss={handleChooseToss}
           onPlayAgain={handlePlayAgain}
           onBackToLanding={handleBackToLanding}
+          myTeamId={myTeamId}
+          isCaptain={isCaptain}
         />
 
         {/* 4. Touch Keyboard Toggle Drawer */}
@@ -1121,8 +1237,8 @@ export default function Home() {
             </div>
             <KeyboardFallback
               playerLabel={myName}
-              selectedThrow={isHost ? pendingThrows.teamA : pendingThrows.teamB}
-              disabled={isBallCooldown}
+              selectedThrow={pendingThrows[myKey]}
+              disabled={isBallCooldown || !iAmActive || myThrowReady}
               onThrow={(val) => {
                 handlePlayerThrow(val);
                 setShowTouchKeyboard(false);
@@ -1194,6 +1310,113 @@ function HowToPlayModal({ onClose }: { onClose: () => void }) {
           <button onClick={onClose} className="nb-btn nb-btn--lime w-full text-xs border-3">
             GOT IT, LET'S PLAY!
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================== */
+/* Online room lobby                           */
+/* =========================================== */
+function RoomLobby({
+  room,
+  myPlayerId,
+  copied,
+  notice,
+  disconnectedNames,
+  onCopy,
+  onStart,
+  onLeave,
+}: {
+  room: ServerRoom;
+  myPlayerId: string;
+  copied: boolean;
+  notice: string | null;
+  disconnectedNames: string[];
+  onCopy: () => void;
+  onStart: () => void;
+  onLeave: () => void;
+}) {
+  const capacity = room.format === '2v2' ? 4 : 2;
+  const isHost = room.hostId === myPlayerId;
+  const full = room.players.length >= capacity;
+  const modeLabel = room.mode === 'baseball' ? '⚾ BASEBALL' : '🏏 HAND CRICKET';
+  const slots = Array.from({ length: capacity }, (_, i) => room.players[i] ?? null);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)] p-4 select-none">
+      <div className="w-full max-w-sm bg-white border-4 border-black shadow-[6px_6px_0_0_#000] animate-slide-up text-black">
+        <div className="bg-black px-4 py-2 flex items-center justify-between">
+          <span className="font-num text-xs font-black text-[#a3f23d] uppercase">
+            {modeLabel} · {room.format}
+          </span>
+          <button onClick={onLeave} className="font-num text-[11px] text-white/80 underline uppercase cursor-pointer">
+            Leave
+          </button>
+        </div>
+        <div className="p-4 space-y-3">
+          <div className="bg-[#1a1a1a] border-3 border-black p-3 text-center">
+            <div className="font-num text-[11px] text-[#aaa] uppercase mb-1">Room code</div>
+            <div className="font-mono text-4xl font-black text-[#ffd60a] tracking-widest">
+              {room.code.toUpperCase()}
+            </div>
+          </div>
+
+          <button
+            onClick={onCopy}
+            className="w-full py-2.5 bg-[#ffd60a] border-3 border-black font-display text-sm font-black uppercase shadow-[3px_3px_0_0_#000] flex items-center justify-center gap-2 cursor-pointer"
+          >
+            {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            <span>{copied ? 'LINK COPIED!' : 'COPY INVITE LINK'}</span>
+          </button>
+
+          <div className="space-y-2">
+            {slots.map((p, i) =>
+              p ? (
+                <div
+                  key={p.id}
+                  className={`flex items-center gap-2.5 px-3 py-2 border-3 border-black font-num text-sm font-black ${
+                    p.teamId === 'team_a' ? 'bg-[#a3f23d]' : 'bg-[#4dabf7]'
+                  }`}
+                >
+                  <span className="flex-1 truncate">{p.name}</span>
+                  <span className="text-[10px] text-black/70">
+                    {room.format === '2v2' ? (p.teamId === 'team_a' ? 'TEAM A' : 'TEAM B') : ''}
+                    {p.isHost ? ' HOST' : ''}
+                    {p.id === myPlayerId ? ' (YOU)' : ''}
+                    {disconnectedNames.includes(p.name) ? ' · AWAY' : ''}
+                  </span>
+                </div>
+              ) : (
+                <div
+                  key={`empty-${i}`}
+                  className="flex items-center gap-2.5 px-3 py-2 border-3 border-dashed border-[#ccc] bg-[#f5f5f5] font-num text-sm text-[#999]"
+                >
+                  <span className="w-2.5 h-2.5 rounded-full border-2 border-[#ccc] animate-pulse" />
+                  Waiting for player {i + 1}...
+                </div>
+              )
+            )}
+          </div>
+
+          {isHost ? (
+            <button
+              onClick={onStart}
+              disabled={!full}
+              className="w-full py-3 bg-[#a3f23d] border-3 border-black font-display text-base font-black uppercase shadow-[4px_4px_0_0_#000] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {full ? 'START MATCH!' : `NEED ${capacity - room.players.length} MORE PLAYER${capacity - room.players.length === 1 ? '' : 'S'}`}
+            </button>
+          ) : (
+            <div className="py-3 border-3 border-[#a3f23d] bg-[#f0ffd8] text-center font-num text-xs font-black uppercase">
+              {full ? 'Waiting for the host to start...' : 'Waiting for more players to join...'}
+            </div>
+          )}
+
+          {notice && (
+            <div className="p-2 bg-[#ff3b30] text-white border-2 border-black font-num text-xs font-bold">{notice}</div>
+          )}
         </div>
       </div>
     </div>
