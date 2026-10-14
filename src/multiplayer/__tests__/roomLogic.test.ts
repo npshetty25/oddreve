@@ -109,12 +109,14 @@ describe('1v1 match flow through the room', () => {
     expect(room.pendingThrows.teamA).toBe(3); // locked in
   });
 
-  it('rejects a 0 / out-of-range throw', () => {
+  it('accepts 0 (closed fist) but rejects out-of-range throws', () => {
     const room = lobby();
     applyAction(room, { action: 'start', playerId: 'h' });
     applyAction(room, { action: 'toss_call', playerId: 'h', call: 'even' });
-    expect(() => applyAction(room, { action: 'toss_throw', playerId: 'h', value: 0 })).toThrow(RoomError);
+    expect(() => applyAction(room, { action: 'toss_throw', playerId: 'h', value: -1 })).toThrow(RoomError);
     expect(() => applyAction(room, { action: 'toss_throw', playerId: 'h', value: 7 })).toThrow(RoomError);
+    applyAction(room, { action: 'toss_throw', playerId: 'h', value: 0 });
+    expect(room.pendingThrows.teamA).toBe(0);
   });
 });
 
