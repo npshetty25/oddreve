@@ -86,13 +86,28 @@ Runs 29 tests across:
 
 ---
 
-## 🌐 Playing with friends (online rooms)
+## 🌐 Playing with friends (peer-to-peer)
 
-Rooms are created through `/api/rooms`. Where they are stored depends on your host:
+Friend matches are **peer-to-peer WebRTC** (PeerJS). There is no game server or database:
+the host's browser runs the room and the guest connects straight to it, so it works on any
+static/serverless host (Vercel included) with nothing to configure.
 
-| Host | Setup |
-| --- | --- |
-| `npm run dev`, `npm start`, a single VPS/container | Nothing to do - rooms are kept in server memory. |
-| **Vercel / any serverless host** | Rooms must live in shared storage or they vanish between requests. Add a free Upstash Redis (Vercel Marketplace -> Upstash) and set `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (the Vercel KV names `KV_REST_API_URL` / `KV_REST_API_TOKEN` also work). |
+- The host creates a room and shares the 5-letter code or invite link.
+- The host must keep the game tab open for the whole match (if they leave, the room ends).
+- Both players see each other's live video in 1v1. 2v2 shares game data only.
+- Every ball uses a synchronized **3 - 2 - 1** countdown; each camera's most common reading
+  from the last 600 ms is submitted at "GO", so both throws happen at the same moment.
 
-Supported online modes: Cricket 1v1, Cricket 2v2, Baseball 1v1, Baseball 2v2 (2v2 needs 4 players; the host starts the match once the room is full).
+### TURN relay (for strict networks)
+
+Most connections are direct. Some corporate/mobile networks need a TURN relay. Out of the box
+the app falls back to a shared public relay (best-effort, rate limited). For reliable results
+create a free TURN account (e.g. Metered.ca Open Relay or Cloudflare Calls) and set:
+
+```bash
+NEXT_PUBLIC_TURN_URL=turn:your-turn-host:443,turn:your-turn-host:443?transport=tcp
+NEXT_PUBLIC_TURN_USERNAME=your-username
+NEXT_PUBLIC_TURN_CREDENTIAL=your-credential
+```
+
+These are public (browser-side) values, so use a TURN credential meant for client use.
