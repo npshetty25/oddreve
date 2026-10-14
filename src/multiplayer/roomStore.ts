@@ -19,6 +19,15 @@ export function usingRedis(): boolean {
   return Boolean(redisUrl() && redisToken());
 }
 
+/**
+ * In-memory rooms only work when one long-lived server handles every request. On serverless
+ * platforms (Vercel, Netlify, Lambda) requests land on different instances, so rooms
+ * created in memory are not reliable there.
+ */
+export function storageReliable(): boolean {
+  return usingRedis() || !(process.env.VERCEL || process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
 declare global {
   var __ODDOREVE_ROOMS__: Map<string, ServerRoom> | undefined;
 }

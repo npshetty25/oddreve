@@ -99,6 +99,8 @@ export default function Home() {
   const [ballCooldownRemaining, setBallCooldownRemaining] = useState(0);
   const [disconnectedNames, setDisconnectedNames] = useState<string[]>([]);
   const [pendingRoomCode, setPendingRoomCode] = useState<string | null>(null);
+  const [storageOk, setStorageOk] = useState(true);
+  const lastRoomRef = useRef<ServerRoom | null>(null);
 
   const lastVersionRef = useRef(0);
   const roomCodeRef = useRef<string | null>(null);
@@ -136,6 +138,7 @@ export default function Home() {
     if (room.version === lastVersionRef.current && roomCodeRef.current === room.code) return;
     lastVersionRef.current = room.version;
     roomCodeRef.current = room.code;
+    lastRoomRef.current = room;
     setActiveRoom(room);
     if (room.match) {
       useGameStore.setState({
@@ -174,12 +177,27 @@ export default function Home() {
         });
         if (cancelled) return;
         if (res.status === 404) {
+          // The server lost the room (cold start / redeploy). Re-upload our last snapshot once.
+          const snapshot = lastRoomRef.current;
+          if (snapshot && snapshot.code === code) {
+            const back = await fetch('/api/rooms', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ restore: snapshot }),
+            });
+            const restored = await back.json().catch(() => null);
+            if (restored?.success && restored.room) {
+              applyRoom(restored.room, Date.now());
+              return;
+            }
+          }
           leaveRoomLocally();
           setScreen('landing');
           setJoinError('This room has closed or expired. Start a new one.');
           return;
         }
         const data = await res.json();
+        if (typeof data.reliable === 'boolean') setStorageOk(data.reliable);
         if (data.success && data.room) applyRoom(data.room, data.serverTime);
       } catch {
         // transient network error: next tick retries
@@ -207,6 +225,7 @@ export default function Home() {
           body: JSON.stringify({ ...body, playerId: playerIdRef.current }),
         });
         const data = await res.json();
+        if (typeof data.reliable === 'boolean') setStorageOk(data.reliable);
         if (data.room) applyRoom(data.room, data.serverTime);
         if (!data.success) {
           setRoomNotice(data.error || 'Something went wrong');
@@ -401,6 +420,7 @@ export default function Home() {
         body: JSON.stringify({ playerName: name, mode, format }),
       });
       const data = await res.json();
+      if (typeof data.reliable === 'boolean') setStorageOk(data.reliable);
       if (data.success && data.room) {
         playerIdRef.current = data.playerId;
         saveSession({ code: data.room.code, playerId: data.playerId });
@@ -827,6 +847,7 @@ export default function Home() {
         myPlayerId={myMultiplayerId}
         copied={copied}
         notice={roomNotice}
+        storageOk={storageOk}
         disconnectedNames={disconnectedNames}
         onCopy={handleCopyInviteLink}
         onStart={handleStartRoomMatch}
@@ -912,8 +933,13 @@ export default function Home() {
         </div>
       </header>
 
-      {(disconnectedNames.length > 0 || roomNotice) && (
+      {(disconnectedNames.length > 0 || roomNotice || (activeRoom && !storageOk)) && (
         <div className="relative z-20 max-w-5xl mx-auto w-full flex-shrink-0">
+          {activeRoom && !storageOk && (
+            <div className="bg-[#ffd60a] text-black border-2 border-black px-3 py-1 font-num text-[11px] font-black">
+              Server storage is not configured - this room may drop mid-match.
+            </div>
+          )}
           {disconnectedNames.length > 0 && (
             <div className="bg-[#ff3b30] text-white border-2 border-black px-3 py-1 font-num text-[11px] font-black uppercase">
               ⚠ {disconnectedNames.join(', ')} seems disconnected. Waiting for them to come back...
@@ -1324,6 +1350,7 @@ function RoomLobby({
   myPlayerId,
   copied,
   notice,
+  storageOk,
   disconnectedNames,
   onCopy,
   onStart,
@@ -1333,6 +1360,7 @@ function RoomLobby({
   myPlayerId: string;
   copied: boolean;
   notice: string | null;
+  storageOk: boolean;
   disconnectedNames: string[];
   onCopy: () => void;
   onStart: () => void;
@@ -1414,6 +1442,12 @@ function RoomLobby({
             </div>
           )}
 
+          {!storageOk && (
+            <div className="p-2 bg-[#ffd60a] border-2 border-black font-num text-[11px] font-bold">
+              Heads up: the server has no shared storage configured, so this room may drop. The site owner needs to
+              add Upstash Redis (see README).
+            </div>
+          )}
           {notice && (
             <div className="p-2 bg-[#ff3b30] text-white border-2 border-black font-num text-xs font-bold">{notice}</div>
           )}

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRoom, updateRoom, touchPlayer } from '@/multiplayer/roomStore';
+import { getRoom, updateRoom, touchPlayer, storageReliable } from '@/multiplayer/roomStore';
 import { applyAction, RoomError } from '@/multiplayer/roomLogic';
 import { RoomAction } from '@/multiplayer/roomTypes';
 
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest, context: RouteContext) {
     if (room && playerId) await touchPlayer(room, playerId); // heartbeat; no version bump
 
     if (!room) return notFound();
-    return NextResponse.json({ success: true, room, serverTime: Date.now() });
+    return NextResponse.json({ success: true, room, serverTime: Date.now(), reliable: storageReliable() });
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err instanceof Error ? err.message : 'Server error' },
@@ -59,7 +59,13 @@ export async function POST(req: NextRequest, context: RouteContext) {
       const f = failure as RoomError;
       return NextResponse.json({ success: false, error: f.message, room }, { status: f.status });
     }
-    return NextResponse.json({ success: true, room, playerId: body.playerId, serverTime: Date.now() });
+    return NextResponse.json({
+      success: true,
+      room,
+      playerId: body.playerId,
+      serverTime: Date.now(),
+      reliable: storageReliable(),
+    });
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err instanceof Error ? err.message : 'Server error' },
