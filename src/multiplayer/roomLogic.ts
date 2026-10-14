@@ -113,7 +113,7 @@ export function activePlayerFor(room: ServerRoom, teamId: TeamId): ServerRoomPla
 }
 
 function isValidThrow(v: unknown): v is ThrowValue {
-  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 6;
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 6;
 }
 
 /**
