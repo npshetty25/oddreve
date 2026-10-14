@@ -191,7 +191,7 @@ export default function Home() {
           if (live.online) {
             sessionRef.current?.send({ action: 'reball', cycle } as never);
           } else {
-            flashNotice('RE-BALL! No clear hand - show 1 to 6 fingers', 3000);
+            flashNotice('RE-BALL! No hand seen - show your hand to the camera', 3000);
             runCountdownRef.current(cycle, 1200);
           }
           return;
@@ -406,7 +406,7 @@ export default function Home() {
 
   // Keypad: lock a value for this ball; it is submitted when the countdown ends.
   const handlePlayerThrow = (val: ThrowValue) => {
-    if (!iAmActive || myThrowReady || val < 1) return;
+    if (!iAmActive || myThrowReady) return;
     manualThrowRef.current = { cycle: ballCycle, value: val };
     setLockedValue(val);
   };
@@ -1341,7 +1341,7 @@ function HowToPlayModal({ onClose }: { onClose: () => void }) {
               ))}
             </div>
             <p className="font-num text-[10px] text-[#666] mt-1.5">
-              * Note: Valid run throws are 1 to 6 fingers.
+              * Closed fist = 0. A ball with no hand in view is a re-ball.
             </p>
           </div>
 
@@ -1350,7 +1350,7 @@ function HowToPlayModal({ onClose }: { onClose: () => void }) {
               RULES
             </h4>
             <ul className="space-y-1 text-xs font-body text-[#333] list-disc pl-4">
-              <li><strong>Hold 1.5s:</strong> Keep your gesture steady to lock your throw.</li>
+              <li><strong>3-2-1:</strong> Both players show their number when the countdown ends. Your last 0.6s is what counts.</li>
               <li><strong>Cricket:</strong> Batter scores their throw. If both throw the same number → OUT!</li>
               <li><strong>Baseball:</strong> Difference of 1 (or 6 and 1) is a strike. 3 consecutive strikes = OUT! Same throw at 0 strikes = double runs! Hits reset strike count.</li>
               <li><strong>2v2 Mode:</strong> Both batters must be dismissed. Bowlers rotate every 6 balls (1 over).</li>
