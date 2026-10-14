@@ -868,7 +868,7 @@ export default function Home() {
           /* 2v2: 4 boxes in a 2x2 grid */
           <div className="grid grid-cols-2 gap-2 sm:gap-3 w-full flex-shrink-0">
             {/* Box 1: You (Camera) - Top Left */}
-            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[220px] sm:h-[260px] md:h-[300px]">
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[300px] sm:h-[360px] md:h-[420px]">
               <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
                 <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
                   <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
@@ -891,7 +891,7 @@ export default function Home() {
             </div>
 
             {/* Box 2: Opponent 1 - Top Right */}
-            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[220px] sm:h-[260px] md:h-[300px]">
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[300px] sm:h-[360px] md:h-[420px]">
               <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
                 <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
                   <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
@@ -927,7 +927,7 @@ export default function Home() {
             </div>
 
             {/* Box 3: Teammate (Player A2) - Bottom Left */}
-            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[220px] sm:h-[260px] md:h-[300px]">
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[300px] sm:h-[360px] md:h-[420px]">
               <div className="bg-[#ffd60a] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
                 <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
                   <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
@@ -944,7 +944,7 @@ export default function Home() {
             </div>
 
             {/* Box 4: Opponent 2 (Player B2) - Bottom Right */}
-            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[220px] sm:h-[260px] md:h-[300px]">
+            <div className="bg-white border-3 sm:border-4 border-black shadow-[4px_4px_0_0_#000] overflow-hidden flex flex-col h-[300px] sm:h-[360px] md:h-[420px]">
               <div className="bg-[#ff6fb5] border-b-2 sm:border-b-3 border-black px-2 py-0.5 flex items-center justify-between text-black flex-shrink-0">
                 <div className="flex items-center gap-1 font-num text-[11px] font-black uppercase truncate">
                   <span className="w-2 h-2 rounded-full border border-black bg-white inline-block" />
