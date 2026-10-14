@@ -26,6 +26,8 @@ export interface ServerRoom {
   pendingThrows: { teamA: ThrowValue | null; teamB: ThrowValue | null };
   lastEvent: BallEvent | null;
   ballCycle: number;
+  /** Set when a ball was voided because someone showed no clear hand */
+  reball: { count: number; by: string } | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -37,6 +39,7 @@ export type RoomAction =
   | { action: 'toss_throw'; playerId: string; value: number; cycle?: number }
   | { action: 'toss_choice'; playerId: string; choice: 'bat' | 'bowl' }
   | { action: 'throw'; playerId: string; value: number; cycle?: number }
+  | { action: 'reball'; playerId: string; cycle: number }
   | { action: 'start_innings_2'; playerId: string }
   | { action: 'reset'; playerId: string }
   | { action: 'leave'; playerId: string }
