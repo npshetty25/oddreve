@@ -7,9 +7,10 @@ import { formatOvers } from '@/engine/toss';
 interface ScoreboardProps {
   match: MatchState;
   lastEvent: BallEvent | null;
+  myTeamId?: 'team_a' | 'team_b';
 }
 
-export function Scoreboard({ match, lastEvent }: ScoreboardProps) {
+export function Scoreboard({ match, lastEvent, myTeamId = 'team_a' }: ScoreboardProps) {
   if (!match) return null;
   const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
   const isTeamABatting = currentInnings?.battingTeamId === match.teamA.id;
@@ -74,6 +75,7 @@ export function Scoreboard({ match, lastEvent }: ScoreboardProps) {
           <div className="flex-1 text-left flex flex-col items-start justify-center">
             <span className="font-num text-[11px] sm:text-xs font-black text-[#a3f23d] uppercase tracking-wider truncate max-w-[160px]">
               {match.teamA.name === 'Team A' ? 'YOU' : match.teamA.name.toUpperCase()}
+              {myTeamId === 'team_a' && match.teamA.name !== 'Team A' ? ' (YOU)' : ''}
             </span>
             <div className="flex items-baseline gap-1.5 mt-0.5">
               <span className="font-display text-3xl sm:text-4xl md:text-5xl font-black text-white leading-none">
@@ -136,6 +138,7 @@ export function Scoreboard({ match, lastEvent }: ScoreboardProps) {
           <div className="flex-1 text-right flex flex-col items-end justify-center">
             <span className="font-num text-[11px] sm:text-xs font-black text-[#a3f23d] uppercase tracking-wider truncate max-w-[160px]">
               {match.teamB.name.toUpperCase()}
+              {myTeamId === 'team_b' ? ' (YOU)' : ''}
             </span>
             <div className="flex items-baseline justify-end gap-1.5 mt-0.5">
               <span className="font-display text-3xl sm:text-4xl md:text-5xl font-black text-white leading-none">
@@ -194,7 +197,7 @@ export function Scoreboard({ match, lastEvent }: ScoreboardProps) {
         {!isSecondInnings && !isMatchOver && match.phase === 'innings1' && match.toss.winnerTeamId && match.toss.choice && (
           <div className="mt-2 -mx-3 -mb-2 sm:-mx-4 sm:-mb-2.5 bg-[#ffd60a] border-t-2 border-black py-0.5 px-2 text-center">
             <span className="font-num text-[10px] sm:text-[11px] font-black uppercase text-black tracking-wider">
-              🪙 {match.toss.winnerTeamId === match.teamA.id ? 'YOU' : match.teamB.name.toUpperCase()} WON TOSS & CHOSE TO {match.toss.choice === 'bat' ? 'BAT' : isBaseball ? 'PITCH' : 'BOWL'} FIRST
+              🪙 {match.toss.winnerTeamId === (myTeamId === 'team_a' ? match.teamA.id : match.teamB.id) ? 'YOU' : (myTeamId === 'team_a' ? match.teamB.name : match.teamA.name).toUpperCase()} WON TOSS & CHOSE TO {match.toss.choice === 'bat' ? 'BAT' : isBaseball ? 'PITCH' : 'BOWL'} FIRST
             </span>
           </div>
         )}

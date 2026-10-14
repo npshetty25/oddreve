@@ -11,6 +11,10 @@ interface CommentaryCardProps {
   onChooseToss?: (choice: TossChoice) => void;
   onPlayAgain?: () => void;
   onBackToLanding?: () => void;
+  /** Which team the viewing player belongs to (online play). Defaults to team_a. */
+  myTeamId?: 'team_a' | 'team_b';
+  /** In 2v2 only the team captain calls the toss / picks bat or bowl. */
+  isCaptain?: boolean;
 }
 
 export function CommentaryCard({
@@ -20,12 +24,15 @@ export function CommentaryCard({
   onChooseToss,
   onPlayAgain,
   onBackToLanding,
+  myTeamId = 'team_a',
+  isCaptain = true,
 }: CommentaryCardProps) {
-  if (!match) return null;
 
   const currentInnings = match.phase === 'innings2' ? match.innings2 : match.innings1;
   const isTeamABatting = currentInnings?.battingTeamId === match.teamA.id;
-  const isUserWinner = match.phase === 'match_over' && match.result?.winnerTeamId === match.teamA.id;
+  const myTeam = myTeamId === 'team_a' ? match.teamA : match.teamB;
+  const oppTeam = myTeamId === 'team_a' ? match.teamB : match.teamA;
+  const isUserWinner = match.phase === 'match_over' && match.result?.winnerTeamId === myTeam.id;
   const isBaseball = match.mode === 'baseball';
 
   // Confetti celebration when user wins
@@ -63,22 +70,26 @@ export function CommentaryCard({
           CALL ODD OR EVEN
         </h3>
         <p className="font-body text-xs text-black mb-2.5">
-          You are calling the toss. Choose odd or even:
+          {match.toss.callerTeamId === myTeam.id && isCaptain
+            ? 'You are calling the toss. Choose odd or even:'
+            : `⏳ Waiting for ${match.toss.callerTeamId === myTeam.id ? 'your team captain' : oppTeam.name} to call the toss...`}
         </p>
+        {match.toss.callerTeamId === myTeam.id && isCaptain && (
         <div className="flex gap-2.5 max-w-xs">
           <button
-            onClick={() => onCallToss?.('team_a', 'odd')}
+            onClick={() => onCallToss?.(myTeam.id, 'odd')}
             className="flex-1 py-2 bg-white hover:bg-neutral-100 border-2 sm:border-3 border-black font-display text-sm font-black text-black uppercase shadow-[2px_2px_0_0_#000] cursor-pointer"
           >
             ODD
           </button>
           <button
-            onClick={() => onCallToss?.('team_a', 'even')}
+            onClick={() => onCallToss?.(myTeam.id, 'even')}
             className="flex-1 py-2 bg-[#ff6fb5] hover:bg-[#ff5ca8] border-2 sm:border-3 border-black font-display text-sm font-black text-black uppercase shadow-[2px_2px_0_0_#000] cursor-pointer"
           >
             EVEN
           </button>
         </div>
+        )}
       </div>
     );
   }
@@ -91,7 +102,8 @@ export function CommentaryCard({
           TOSS THROW
         </h3>
         <p className="font-body text-xs sm:text-sm text-black">
-          Hand up in frame. Show 1 to 6 fingers simultaneously to throw.
+          {match.toss.callerTeamId === myTeam.id ? 'You' : oppTeam.name} called{' '}
+          <strong>{match.toss.call.toUpperCase()}</strong>. Hand up in frame — show 1 to 6 fingers to throw.
         </p>
       </div>
     );
@@ -99,11 +111,11 @@ export function CommentaryCard({
 
   // 3. TOSS RESULT PHASE
   if (match.phase === 'toss_result') {
-    const isUserWinner = match.toss.winnerTeamId === match.teamA.id;
-    const winnerName = isUserWinner ? 'YOU' : match.teamB.name.toUpperCase();
-    const callerName = match.toss.callerTeamId === match.teamA.id ? 'YOU' : match.teamB.name.toUpperCase();
-    const throwA = match.toss.teamAThrow ?? 0;
-    const throwB = match.toss.teamBThrow ?? 0;
+    const isUserWinner = match.toss.winnerTeamId === myTeam.id;
+    const winnerName = isUserWinner ? 'YOU' : oppTeam.name.toUpperCase();
+    const callerName = match.toss.callerTeamId === myTeam.id ? 'YOU' : oppTeam.name.toUpperCase();
+    const throwA = (myTeamId === 'team_a' ? match.toss.teamAThrow : match.toss.teamBThrow) ?? 0;
+    const throwB = (myTeamId === 'team_a' ? match.toss.teamBThrow : match.toss.teamAThrow) ?? 0;
     const sum = throwA + throwB;
     const isEven = sum % 2 === 0;
     const outcome = isEven ? 'EVEN' : 'ODD';
@@ -119,7 +131,7 @@ export function CommentaryCard({
           <div className="flex items-center gap-1.5 font-num text-[11px] font-black bg-white px-2.5 py-1 border-2 border-black shadow-[1px_1px_0_0_#000]">
             <span>YOU: {throwA}</span>
             <span>+</span>
-            <span>{match.teamB.name.toUpperCase()}: {throwB}</span>
+            <span>{oppTeam.name.toUpperCase()}: {throwB}</span>
             <span>=</span>
             <span className="bg-[#a3f23d] px-1">{sum} ({outcome})</span>
           </div>
@@ -129,7 +141,7 @@ export function CommentaryCard({
           {callerName} called <span className="uppercase underline font-black">{match.toss.call}</span>. Total is {sum} ({outcome}). {winnerName} won the toss!
         </p>
 
-        {isUserWinner ? (
+        {isUserWinner && isCaptain ? (
           <div>
             <p className="font-display text-xs sm:text-sm font-black text-black mb-2 uppercase">
               CHOOSE YOUR ROLE TO START THE MATCH:
@@ -164,8 +176,8 @@ export function CommentaryCard({
 
   // 4. MATCH OVER PHASE
   if (match.phase === 'match_over') {
-    const isUserWinner = match.result?.winnerTeamId === match.teamA.id;
-    const isTie = match.result?.winnerTeamId === null;
+    const isUserWinner = match.result?.winnerTeamId === myTeam.id;
+    const isTie = match.result?.winnerTeamId === 'tie' || match.result?.winnerTeamId === null;
 
     let scoreTeamA = 0;
     let scoreTeamB = 0;
@@ -177,12 +189,14 @@ export function CommentaryCard({
       scoreTeamA = match.innings2?.score ?? 0;
     }
 
-    const oppName = match.teamB.name;
+    const oppName = oppTeam.name;
+    const myScore = myTeamId === 'team_a' ? scoreTeamA : scoreTeamB;
+    const oppScore = myTeamId === 'team_a' ? scoreTeamB : scoreTeamA;
     const summaryText = isTie
-      ? `Match tied at ${scoreTeamA} runs!`
+      ? `Match tied at ${myScore} runs!`
       : isUserWinner
-      ? `You beat ${oppName} ${scoreTeamA} to ${scoreTeamB}.`
-      : `${oppName} beat You ${scoreTeamB} to ${scoreTeamA}.`;
+      ? `You beat ${oppName} ${myScore} to ${oppScore}.`
+      : `${oppName} beat You ${oppScore} to ${myScore}.`;
 
     return (
       <div
