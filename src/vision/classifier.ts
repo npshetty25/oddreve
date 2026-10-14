@@ -20,8 +20,15 @@ function distance(a: HandLandmark, b: HandLandmark): number {
 
 // Compare each fingertip with its own knuckle so a tilted hand is classified
 // by shape rather than by its absolute y-position in the camera frame.
-function isFingerExtended(landmarks: HandLandmark[], tipIdx: number, mcpIdx: number): boolean {
-  return distance(landmarks[tipIdx], landmarks[0]) > distance(landmarks[mcpIdx], landmarks[0]) * 1.3;
+function isFingerExtended(
+  landmarks: HandLandmark[],
+  tipIdx: number,
+  pipIdx: number,
+  mcpIdx: number
+): boolean {
+  const tipPastKnuckle = distance(landmarks[tipIdx], landmarks[0]) > distance(landmarks[mcpIdx], landmarks[0]) * 1.3;
+  const tipPastJoint = distance(landmarks[tipIdx], landmarks[mcpIdx]) > distance(landmarks[pipIdx], landmarks[mcpIdx]) * 1.25;
+  return tipPastKnuckle && tipPastJoint;
 }
 
 function isThumbExtended(landmarks: HandLandmark[]): boolean {
@@ -52,10 +59,10 @@ export function classifyHandGesture(
     };
   }
 
-  const indexExt = isFingerExtended(landmarks, 8, 5);
-  const middleExt = isFingerExtended(landmarks, 12, 9);
-  const ringExt = isFingerExtended(landmarks, 16, 13);
-  const pinkyExt = isFingerExtended(landmarks, 20, 17);
+  const indexExt = isFingerExtended(landmarks, 8, 6, 5);
+  const middleExt = isFingerExtended(landmarks, 12, 10, 9);
+  const ringExt = isFingerExtended(landmarks, 16, 14, 13);
+  const pinkyExt = isFingerExtended(landmarks, 20, 18, 17);
   const mainFingersCount = (indexExt ? 1 : 0) + (middleExt ? 1 : 0) + (ringExt ? 1 : 0) + (pinkyExt ? 1 : 0);
   const thumbExt = isThumbExtended(landmarks);
 
