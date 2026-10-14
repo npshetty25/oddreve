@@ -10,6 +10,7 @@ interface WebcamHandTrackerProps {
   playerLabel: string;
   isThrowRequired: boolean;
   ballCycle?: number;
+  cooldownRemaining?: number;
   onThrowConfirmed: (value: ThrowValue) => void;
   mirror?: boolean;
 }
@@ -18,6 +19,7 @@ export function WebcamHandTracker({
   playerLabel,
   isThrowRequired,
   ballCycle = 0,
+  cooldownRemaining = 0,
   onThrowConfirmed,
   mirror = true,
 }: WebcamHandTrackerProps) {
@@ -321,6 +323,7 @@ export function WebcamHandTracker({
   }, [ballCycle, isThrowRequired]);
 
   const activeNumber = confirmedValue ?? (detection.fingerCount && detection.fingerCount >= 1 && detection.fingerCount <= 6 ? detection.fingerCount : null);
+  const cooldownSeconds = Math.ceil(cooldownRemaining / 1000);
 
   return (
     <div className="w-full h-full relative bg-black select-none overflow-hidden">
@@ -358,11 +361,12 @@ export function WebcamHandTracker({
         )}
       </div>
 
-      {/* Center Pink Circular Number Badge */}
-      {activeNumber !== null && (
+      {/* Center badge shows the next-ball countdown after a throw. */}
+      {(activeNumber !== null || cooldownRemaining > 0) && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#ff6fb5] border-3 sm:border-4 border-black flex items-center justify-center font-display text-3xl sm:text-4xl font-black text-white shadow-[4px_4px_0_0_#000] animate-bounce-in">
-            {activeNumber}
+          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#ff6fb5] border-3 sm:border-4 border-black flex flex-col items-center justify-center font-display font-black text-white shadow-[4px_4px_0_0_#000] animate-bounce-in">
+            {cooldownRemaining > 0 && <span className="font-num text-[8px] sm:text-[9px] leading-none">NEXT BALL</span>}
+            <span className="text-3xl sm:text-4xl leading-none">{cooldownRemaining > 0 ? cooldownSeconds : activeNumber}</span>
           </div>
         </div>
       )}
