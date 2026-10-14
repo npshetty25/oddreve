@@ -90,7 +90,7 @@ export default function Home() {
   const playerIdRef = useRef('');
   const manualThrowRef = useRef<{ cycle: number; value: ThrowValue } | null>(null);
   const countdownTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const retriesRef = useRef(0);
+  const reballSeenRef = useRef(0);
 
   // Give both players a short pause to see the result before the next ball.
   useEffect(() => {
@@ -187,15 +187,15 @@ export default function Home() {
         const value =
           manual && manual.cycle === cycle ? manual.value : trackerRef.current?.captureThrow() ?? null;
         if (value === null) {
-          // No clear hand in the last 600ms: run another short countdown for this same ball.
-          if (retriesRef.current < 6) {
-            retriesRef.current += 1;
-            flashNotice('No clear hand seen - show 1 to 6 fingers!');
-            runCountdownRef.current(cycle, 500);
+          // No clear hand: the ball is void for everyone and is thrown again (re-ball).
+          if (live.online) {
+            sessionRef.current?.send({ action: 'reball', cycle } as never);
+          } else {
+            flashNotice('RE-BALL! No clear hand - show 1 to 6 fingers', 3000);
+            runCountdownRef.current(cycle, 1200);
           }
           return;
         }
-        retriesRef.current = 0;
         submitThrow(value, cycle);
       });
       at(leadMs + 3700, () => setCountdownLabel((l) => (l === 'GO' ? null : l)));
@@ -212,6 +212,7 @@ export default function Home() {
     sessionRef.current = null;
     playerIdRef.current = '';
     lastVersionRef.current = 0;
+    reballSeenRef.current = 0;
     stopCountdown();
     setActiveRoom(null);
     setMyMultiplayerId('');
@@ -358,16 +359,18 @@ export default function Home() {
   useEffect(() => {
     manualThrowRef.current = null;
     setLockedValue(null);
-    retriesRef.current = 0;
     stopCountdown();
     if (screen !== 'playing') return;
     if (match.phase !== 'toss_throw' && match.phase !== 'innings1' && match.phase !== 'innings2') return;
     if (activeRoom && (activeRoom.stage !== 'playing' || sessionRole !== 'host')) return;
 
     const cycle = ballCycle;
-    const pause = lastBallEvent && (match.phase === 'innings1' || match.phase === 'innings2')
-      ? RESULT_PAUSE_MS
-      : PHASE_PAUSE_MS;
+    const wasReball = (activeRoom?.reball?.count ?? 0) !== reballSeenRef.current;
+    reballSeenRef.current = activeRoom?.reball?.count ?? 0;
+    const pause =
+      !wasReball && lastBallEvent && (match.phase === 'innings1' || match.phase === 'innings2')
+        ? RESULT_PAUSE_MS
+        : PHASE_PAUSE_MS;
     const id = setTimeout(() => {
       if (liveRef.current.cycle !== cycle) return;
       if (activeRoom && sessionRef.current) {
@@ -380,6 +383,15 @@ export default function Home() {
     return () => clearTimeout(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ballCycle, match.phase, screen, activeRoom?.stage, sessionRole]);
+
+  // Tell both players when a ball was voided
+  const reballCount = activeRoom?.reball?.count ?? 0;
+  useEffect(() => {
+    if (activeRoom?.reball && reballCount > 0) {
+      flashNotice(`RE-BALL! ${activeRoom.reball.by} showed no clear hand - throw again`, 3500);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reballCount]);
 
   // Copy shareable link
   const handleCopyInviteLink = () => {
