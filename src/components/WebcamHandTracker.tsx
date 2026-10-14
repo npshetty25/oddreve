@@ -18,8 +18,8 @@ const SAMPLE_WINDOW_MS = 600;
 
 export interface WebcamHandTrackerHandle {
   /**
-   * Most common finger count seen in the last 600ms (1-6), or null if no valid hand was
-   * seen. Called at the end of the 3-2-1 countdown so both players throw at the same time.
+   * Most common finger count seen in the last 600ms (0 = fist, 6 = thumbs up), or null if
+   * no hand was seen at all. Called at the end of the 3-2-1 countdown so both players throw at the same time.
    */
   captureThrow(): ThrowValue | null;
 }
@@ -71,7 +71,7 @@ export const WebcamHandTracker = forwardRef<WebcamHandTrackerHandle, WebcamHandT
         const counts = new Map<ThrowValue, number>();
         let best: ThrowValue | null = null;
         for (const s of samplesRef.current) {
-          if (now - s.at > SAMPLE_WINDOW_MS || s.count < 1 || s.count > 6) continue;
+          if (now - s.at > SAMPLE_WINDOW_MS) continue;
           const c = (counts.get(s.count) ?? 0) + 1;
           counts.set(s.count, c);
           // ties go to the most recent value
@@ -274,9 +274,7 @@ export const WebcamHandTracker = forwardRef<WebcamHandTrackerHandle, WebcamHandT
                     ctx.stroke();
                   }
 
-                  // World landmarks are metric 3D, so finger angles are not skewed by aspect ratio
-                  const world = results.worldLandmarks?.[0];
-                  const classified = classifyHandGesture(world ?? rawLandmarks, confidence);
+                  const classified = classifyHandGesture(rawLandmarks, confidence);
                   setDetection(classified);
 
                   const buf = samplesRef.current;
@@ -305,10 +303,7 @@ export const WebcamHandTracker = forwardRef<WebcamHandTrackerHandle, WebcamHandT
       };
     }, [landmarker, hasPermission]);
 
-    const seen =
-      detection.fingerCount !== null && detection.fingerCount >= 1 && detection.fingerCount <= 6
-        ? detection.fingerCount
-        : null;
+    const seen = detection.fingerCount;
     const cooldownSeconds = Math.ceil(cooldownRemaining / 1000);
 
     return (
