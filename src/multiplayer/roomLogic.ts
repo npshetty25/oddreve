@@ -65,6 +65,7 @@ export function createRoom(opts: {
     pendingThrows: { teamA: null, teamB: null },
     lastEvent: null,
     ballCycle: 0,
+    reball: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -237,6 +238,17 @@ export function applyAction(room: ServerRoom, req: RoomAction, now = Date.now())
         room.pendingThrows = { teamA: null, teamB: null };
         room.ballCycle += 1;
       }
+      return changed();
+    }
+
+    case 'reball': {
+      // Someone had no clear hand at GO: void this ball for everyone and throw again.
+      const throwing =
+        match.phase === 'toss_throw' || match.phase === 'innings1' || match.phase === 'innings2';
+      if (!throwing || req.cycle !== room.ballCycle) return room; // stale or duplicate
+      room.pendingThrows = { teamA: null, teamB: null };
+      room.ballCycle += 1;
+      room.reball = { count: (room.reball?.count ?? 0) + 1, by: me.name };
       return changed();
     }
 
