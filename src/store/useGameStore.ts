@@ -53,9 +53,9 @@ interface GameStore {
   resetMatch: () => void;
 }
 
-// In ODDOREVE, valid moves are 1 to 6
+// Valid throws are 0 (closed fist) to 6 (thumbs up), same as the original game
 function getRandomThrow(): ThrowValue {
-  return (Math.floor(Math.random() * 6) + 1) as ThrowValue;
+  return Math.floor(Math.random() * 7) as ThrowValue;
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -156,8 +156,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   setPlayerThrow: (teamId, value) => {
-    // 0 is fist / idle; valid cricket moves are 1 to 6
-    if (value < 1 || value > 6) return;
+    if (value < 0 || value > 6) return;
 
     const { match, opponentType } = get();
 
