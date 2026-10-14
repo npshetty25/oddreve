@@ -6,8 +6,9 @@ import { useTheme } from '@/store/useTheme';
 import { usePlayerProfile } from '@/store/usePlayerProfile';
 import { Scoreboard } from '@/components/Scoreboard';
 import { CommentaryCard } from '@/components/CommentaryCard';
-import { ServerRoom } from '@/app/api/rooms/route';
-import { WebcamHandTracker } from '@/components/WebcamHandTracker';
+import { ServerRoom } from '@/multiplayer/roomTypes';
+import { WebcamHandTracker, WebcamHandTrackerHandle } from '@/components/WebcamHandTracker';
+import { hostRoom, joinRoom, P2PHandlers, P2PSession } from '@/multiplayer/p2p';
 import { KeyboardFallback } from '@/components/KeyboardFallback';
 import { GameMode, GameFormat, ThrowValue, TossCall, TossChoice } from '@/engine/types';
 import {
@@ -28,32 +29,11 @@ import {
 type AppScreen = 'landing' | 'setup' | 'playing';
 type OpponentChoice = 'friend' | 'computer';
 
-const SESSION_KEY = 'oddoreve-room-session';
-const POLL_MS = 700;
 const DISCONNECT_AFTER_MS = 15000;
-
-interface RoomSession {
-  code: string;
-  playerId: string;
-}
-
-function loadSession(): RoomSession | null {
-  try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
-    return raw ? (JSON.parse(raw) as RoomSession) : null;
-  } catch {
-    return null;
-  }
-}
-function saveSession(s: RoomSession | null) {
-  try {
-    if (s) sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
-    else sessionStorage.removeItem(SESSION_KEY);
-  } catch {}
-}
-function newPlayerId() {
-  return `p_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-}
+/** Pause after a ball result before the next 3-2-1 begins */
+const RESULT_PAUSE_MS = 3000;
+/** Pause before the very first countdown of a phase */
+const PHASE_PAUSE_MS = 1200;
 
 export default function Home() {
   const {
@@ -88,7 +68,7 @@ export default function Home() {
   const [showNameModal, setShowNameModal] = useState(false);
   const [showTouchKeyboard, setShowTouchKeyboard] = useState(false);
 
-  // Online multiplayer state
+  // Online (peer-to-peer) state
   const [activeRoom, setActiveRoom] = useState<ServerRoom | null>(null);
   const [myMultiplayerId, setMyMultiplayerId] = useState<string>('');
   const [joinCodeInput, setJoinCodeInput] = useState('');
@@ -99,21 +79,27 @@ export default function Home() {
   const [ballCooldownRemaining, setBallCooldownRemaining] = useState(0);
   const [disconnectedNames, setDisconnectedNames] = useState<string[]>([]);
   const [pendingRoomCode, setPendingRoomCode] = useState<string | null>(null);
-  const [storageOk, setStorageOk] = useState(true);
-  const lastRoomRef = useRef<ServerRoom | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [countdownLabel, setCountdownLabel] = useState<string | null>(null);
+  const [lockedValue, setLockedValue] = useState<ThrowValue | null>(null);
 
+  const sessionRef = useRef<P2PSession | null>(null);
+  const trackerRef = useRef<WebcamHandTrackerHandle | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const lastVersionRef = useRef(0);
-  const roomCodeRef = useRef<string | null>(null);
   const playerIdRef = useRef('');
+  const manualThrowRef = useRef<{ cycle: number; value: ThrowValue } | null>(null);
+  const countdownTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const retriesRef = useRef(0);
 
-  // Give both players three seconds to see the result before the next ball.
+  // Give both players a short pause to see the result before the next ball.
   useEffect(() => {
     if (!lastBallEvent || (match.phase !== 'innings1' && match.phase !== 'innings2')) {
       setBallCooldownRemaining(0);
       return;
     }
 
-    const cooldownEndsAt = Date.now() + 3000;
+    const cooldownEndsAt = Date.now() + RESULT_PAUSE_MS;
     const updateRemaining = () => {
       setBallCooldownRemaining(Math.max(0, cooldownEndsAt - Date.now()));
     };
@@ -123,9 +109,9 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [ballCycle, lastBallEvent?.ballNumber, match.phase]);
 
-  /* ---------- online room plumbing ---------- */
+  /* ---------- peer-to-peer room plumbing ---------- */
 
-  // Push a server room snapshot into local React/zustand state (only when it actually changed).
+  // Push a room snapshot into local React/zustand state (only when it actually changed).
   const applyRoom = useCallback((room: ServerRoom, serverTime?: number) => {
     if (serverTime) {
       const gone = room.players
@@ -135,10 +121,8 @@ export default function Home() {
         prev.length === gone.length && prev.every((n, i) => n === gone[i]) ? prev : gone
       );
     }
-    if (room.version === lastVersionRef.current && roomCodeRef.current === room.code) return;
+    if (room.version === lastVersionRef.current) return;
     lastVersionRef.current = room.version;
-    roomCodeRef.current = room.code;
-    lastRoomRef.current = room;
     setActiveRoom(room);
     if (room.match) {
       useGameStore.setState({
@@ -151,101 +135,126 @@ export default function Home() {
     }
   }, []);
 
+  const stopCountdown = useCallback(() => {
+    countdownTimersRef.current.forEach(clearTimeout);
+    countdownTimersRef.current = [];
+    setCountdownLabel(null);
+  }, []);
+
+  const flashNotice = useCallback((text: string, ms = 3000) => {
+    setRoomNotice(text);
+    setTimeout(() => setRoomNotice((cur) => (cur === text ? null : cur)), ms);
+  }, []);
+
+  // Latest values for timers/handlers that outlive a render
+  const liveRef = useRef({
+    cycle: 0,
+    phase: match.phase,
+    iAmActive: true,
+    myThrowReady: false,
+    online: false,
+  });
+
+  const submitThrow = useCallback(
+    (value: ThrowValue, cycle: number) => {
+      const live = liveRef.current;
+      if (live.online) {
+        sessionRef.current?.send({
+          action: live.phase === 'toss_throw' ? 'toss_throw' : 'throw',
+          value,
+          cycle,
+        } as never);
+      } else {
+        setPlayerThrow('team_a', value);
+      }
+    },
+    [setPlayerThrow]
+  );
+
+  // The synchronized 3-2-1. At the end we sample the camera's last 600ms (or use the keypad).
+  const runCountdown = useCallback(
+    (cycle: number, leadMs: number) => {
+      stopCountdown();
+      const at = (ms: number, fn: () => void) => countdownTimersRef.current.push(setTimeout(fn, Math.max(0, ms)));
+      at(leadMs, () => setCountdownLabel('3'));
+      at(leadMs + 1000, () => setCountdownLabel('2'));
+      at(leadMs + 2000, () => setCountdownLabel('1'));
+      at(leadMs + 3000, () => {
+        setCountdownLabel('GO');
+        const live = liveRef.current;
+        if (live.cycle !== cycle || !live.iAmActive || live.myThrowReady) return;
+        const manual = manualThrowRef.current;
+        const value =
+          manual && manual.cycle === cycle ? manual.value : trackerRef.current?.captureThrow() ?? null;
+        if (value === null) {
+          // No clear hand in the last 600ms: run another short countdown for this same ball.
+          if (retriesRef.current < 6) {
+            retriesRef.current += 1;
+            flashNotice('No clear hand seen - show 1 to 6 fingers!');
+            runCountdownRef.current(cycle, 500);
+          }
+          return;
+        }
+        retriesRef.current = 0;
+        submitThrow(value, cycle);
+      });
+      at(leadMs + 3700, () => setCountdownLabel((l) => (l === 'GO' ? null : l)));
+    },
+    [stopCountdown, submitThrow, flashNotice]
+  );
+  const runCountdownRef = useRef(runCountdown);
+  useEffect(() => {
+    runCountdownRef.current = runCountdown;
+  }, [runCountdown]);
+
   const leaveRoomLocally = useCallback(() => {
-    saveSession(null);
-    roomCodeRef.current = null;
+    sessionRef.current?.close();
+    sessionRef.current = null;
     playerIdRef.current = '';
     lastVersionRef.current = 0;
+    stopCountdown();
     setActiveRoom(null);
     setMyMultiplayerId('');
     setDisconnectedNames([]);
-  }, []);
+    setRemoteStream(null);
+  }, [stopCountdown]);
 
-  // Poll the room (also acts as heartbeat)
-  useEffect(() => {
-    if (!activeRoom?.code || !myMultiplayerId || screen !== 'playing') return;
-    const code = activeRoom.code;
-    let cancelled = false;
-    let inFlight = false;
-
-    const tick = async () => {
-      if (inFlight || cancelled) return;
-      inFlight = true;
-      try {
-        const res = await fetch(`/api/rooms/${code}?playerId=${encodeURIComponent(myMultiplayerId)}`, {
-          cache: 'no-store',
-        });
-        if (cancelled) return;
-        if (res.status === 404) {
-          // The server lost the room (cold start / redeploy). Re-upload our last snapshot once.
-          const snapshot = lastRoomRef.current;
-          if (snapshot && snapshot.code === code) {
-            const back = await fetch('/api/rooms', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ restore: snapshot }),
-            });
-            const restored = await back.json().catch(() => null);
-            if (restored?.success && restored.room) {
-              applyRoom(restored.room, Date.now());
-              return;
-            }
-          }
-          leaveRoomLocally();
-          setScreen('landing');
-          setJoinError('This room has closed or expired. Start a new one.');
-          return;
-        }
-        const data = await res.json();
-        if (typeof data.reliable === 'boolean') setStorageOk(data.reliable);
-        if (data.success && data.room) applyRoom(data.room, data.serverTime);
-      } catch {
-        // transient network error: next tick retries
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    const id = setInterval(tick, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [activeRoom?.code, myMultiplayerId, screen, applyRoom, leaveRoomLocally]);
-
-  // Send a game action to the room. The response is applied immediately for snappy UI.
-  const sendAction = useCallback(
-    async (body: Record<string, unknown>) => {
-      const code = roomCodeRef.current;
-      if (!code) return;
-      try {
-        const res = await fetch(`/api/rooms/${code}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...body, playerId: playerIdRef.current }),
-        });
-        const data = await res.json();
-        if (typeof data.reliable === 'boolean') setStorageOk(data.reliable);
-        if (data.room) applyRoom(data.room, data.serverTime);
-        if (!data.success) {
-          setRoomNotice(data.error || 'Something went wrong');
-          setTimeout(() => setRoomNotice(null), 3500);
-        }
-      } catch {
-        setRoomNotice('Connection problem - retrying...');
-        setTimeout(() => setRoomNotice(null), 3500);
+  const p2pHandlers = useRef<P2PHandlers>({
+    onRoom: (room, serverTime) => applyRoom(room, serverTime),
+    onCountdown: (cycle, leadMs) => runCountdownRef.current(cycle, leadMs),
+    onRemoteStream: (s) => setRemoteStream(s),
+    onError: (message, fatal) => {
+      if (fatal) {
+        leaveRoomLocallyRef.current();
+        setScreen('landing');
+        setJoinError(message);
+      } else {
+        flashNotice(message, 3500);
       }
     },
-    [applyRoom]
-  );
+  }).current;
+  const leaveRoomLocallyRef = useRef(leaveRoomLocally);
+  useEffect(() => {
+    leaveRoomLocallyRef.current = leaveRoomLocally;
+  }, [leaveRoomLocally]);
 
-  // Remember ?room= and any previous session on first load
+  const handleLocalStream = useCallback((stream: MediaStream | null) => {
+    localStreamRef.current = stream;
+    sessionRef.current?.setLocalStream(stream);
+  }, []);
+
+  // Tidy up the connection if the page is closed
+  useEffect(() => {
+    const onUnload = () => sessionRef.current?.close();
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, []);
+
+  // Remember ?room= from an invite link
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const fromUrl = params.get('room')?.trim().toLowerCase() || null;
-    const session = loadSession();
-    const code = fromUrl || session?.code || null;
-    if (code) setPendingRoomCode(code);
+    if (fromUrl) setPendingRoomCode(fromUrl);
   }, []);
 
   useEffect(() => {
@@ -329,14 +338,48 @@ export default function Home() {
   const oppThrowReady = pendingThrows[oppKey] !== null;
   const isBallCooldown = ballCooldownRemaining > 0;
 
-  const myThrowRequired =
-    iAmActive && !myThrowReady && (match.phase === 'toss_throw' || (isInnings && !isBallCooldown));
-
   const oppDisplayedThrow = lastBallEvent
     ? myTeamBatting
       ? lastBallEvent.bowlerThrow
       : lastBallEvent.batterThrow
     : null;
+
+  liveRef.current = {
+    cycle: ballCycle,
+    phase: match.phase,
+    iAmActive,
+    myThrowReady,
+    online: Boolean(activeRoom),
+  };
+
+  // Each new ball (or toss throw) -> clear any keypad lock and schedule the next 3-2-1.
+  // Local games run it directly; in online games the host decides and tells everyone.
+  const sessionRole = sessionRef.current?.role ?? null;
+  useEffect(() => {
+    manualThrowRef.current = null;
+    setLockedValue(null);
+    retriesRef.current = 0;
+    stopCountdown();
+    if (screen !== 'playing') return;
+    if (match.phase !== 'toss_throw' && match.phase !== 'innings1' && match.phase !== 'innings2') return;
+    if (activeRoom && (activeRoom.stage !== 'playing' || sessionRole !== 'host')) return;
+
+    const cycle = ballCycle;
+    const pause = lastBallEvent && (match.phase === 'innings1' || match.phase === 'innings2')
+      ? RESULT_PAUSE_MS
+      : PHASE_PAUSE_MS;
+    const id = setTimeout(() => {
+      if (liveRef.current.cycle !== cycle) return;
+      if (activeRoom && sessionRef.current) {
+        const lead = sessionRef.current.startCountdown(cycle);
+        runCountdownRef.current(cycle, lead);
+      } else {
+        runCountdownRef.current(cycle, 700);
+      }
+    }, pause);
+    return () => clearTimeout(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ballCycle, match.phase, screen, activeRoom?.stage, sessionRole]);
 
   // Copy shareable link
   const handleCopyInviteLink = () => {
@@ -349,45 +392,38 @@ export default function Home() {
 
   /* ---------- handlers (local or online) ---------- */
 
-  const handlePlayerThrow = async (val: ThrowValue) => {
-    if (isBallCooldown || !iAmActive || val < 1) return;
-    if (activeRoom) {
-      if (myThrowReady) return;
-      await sendAction({
-        action: match.phase === 'toss_throw' ? 'toss_throw' : 'throw',
-        value: val,
-        cycle: ballCycle,
-      });
-    } else {
-      setPlayerThrow('team_a', val);
-    }
+  // Keypad: lock a value for this ball; it is submitted when the countdown ends.
+  const handlePlayerThrow = (val: ThrowValue) => {
+    if (!iAmActive || myThrowReady || val < 1) return;
+    manualThrowRef.current = { cycle: ballCycle, value: val };
+    setLockedValue(val);
   };
 
-  const handleCallToss = async (callerTeamId: string, call: TossCall) => {
-    if (activeRoom) await sendAction({ action: 'toss_call', call });
+  const handleCallToss = (callerTeamId: string, call: TossCall) => {
+    if (activeRoom) sessionRef.current?.send({ action: 'toss_call', call } as never);
     else callToss(callerTeamId, call);
   };
 
-  const handleChooseToss = async (choice: TossChoice) => {
-    if (activeRoom) await sendAction({ action: 'toss_choice', choice });
+  const handleChooseToss = (choice: TossChoice) => {
+    if (activeRoom) sessionRef.current?.send({ action: 'toss_choice', choice } as never);
     else chooseToss(choice);
   };
 
-  const handleStartSecondInnings = async () => {
-    if (activeRoom) await sendAction({ action: 'start_innings_2' });
+  const handleStartSecondInnings = () => {
+    if (activeRoom) sessionRef.current?.send({ action: 'start_innings_2' } as never);
     else startSecondInnings();
   };
 
-  const handlePlayAgain = async () => {
+  const handlePlayAgain = () => {
     if (activeRoom) {
-      await sendAction({ action: 'reset' });
+      sessionRef.current?.send({ action: 'reset' } as never);
     } else {
       resetMatch();
       initMatch({ mode: match.mode, format: match.format, opponentType });
     }
   };
 
-  const handleStartRoomMatch = () => sendAction({ action: 'start' });
+  const handleStartRoomMatch = () => sessionRef.current?.send({ action: 'start' } as never);
 
   // Start Offline / Computer Game
   function handleStartComputerGame(mode: GameMode, format: GameFormat) {
@@ -406,38 +442,31 @@ export default function Home() {
     setScreen('playing');
   }
 
-  // Create a room and wait for friends in the lobby
+  // Host a room (this browser becomes the room) and wait for friends in the lobby
   async function handleCreateFriendRoom(mode: GameMode, format: GameFormat) {
     const name = playerName.trim() || profile?.name || 'You';
     if (!profile) {
       createProfile(name, playerUsername);
     }
     setJoinError(null);
+    setIsJoiningRoom(true);
     try {
-      const res = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerName: name, mode, format }),
-      });
-      const data = await res.json();
-      if (typeof data.reliable === 'boolean') setStorageOk(data.reliable);
-      if (data.success && data.room) {
-        playerIdRef.current = data.playerId;
-        saveSession({ code: data.room.code, playerId: data.playerId });
-        setMyMultiplayerId(data.playerId);
-        setOpponentType('human');
-        lastVersionRef.current = 0;
-        applyRoom(data.room);
-        setScreen('playing');
-      } else {
-        setJoinError(data.error || 'Failed to create room');
-      }
+      lastVersionRef.current = 0;
+      const session = await hostRoom({ playerName: name, mode, format }, p2pHandlers);
+      sessionRef.current = session;
+      playerIdRef.current = session.playerId;
+      session.setLocalStream(localStreamRef.current);
+      setMyMultiplayerId(session.playerId);
+      setOpponentType('human');
+      setScreen('playing');
     } catch (err) {
-      setJoinError(err instanceof Error ? err.message : 'Network error');
+      setJoinError(err instanceof Error ? err.message : 'Could not create the room');
+    } finally {
+      setIsJoiningRoom(false);
     }
   }
 
-  // Join (or rejoin) an existing room
+  // Join a friend's room by code
   async function handleJoinFriendMatch(code: string, nameOverride?: string) {
     const trimmed = code.trim().toLowerCase();
     if (!trimmed) {
@@ -448,39 +477,26 @@ export default function Home() {
     setJoinError(null);
     const name = nameOverride || playerName.trim() || profile?.name || 'Friend';
     try {
-      const session = loadSession();
-      const playerId = session?.code === trimmed ? session.playerId : newPlayerId();
-      const res = await fetch(`/api/rooms/${trimmed}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'join', playerId, playerName: name }),
-      });
-      const data = await res.json();
-      if (data.success && data.room) {
-        playerIdRef.current = playerId;
-        saveSession({ code: trimmed, playerId });
-        setMyMultiplayerId(playerId);
-        setOpponentType('human');
-        lastVersionRef.current = 0;
-        applyRoom(data.room, data.serverTime);
-        setScreen('playing');
-      } else {
-        if (res.status === 404) saveSession(null);
-        setJoinError(data.error || 'Room not found or full');
-        setScreen((s) => (s === 'landing' ? 'setup' : s));
-        setOpponentChoice('friend');
-      }
+      lastVersionRef.current = 0;
+      const playerId = `p_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      playerIdRef.current = playerId;
+      const session = await joinRoom({ code: trimmed, playerName: name, playerId }, p2pHandlers);
+      sessionRef.current = session;
+      session.setLocalStream(localStreamRef.current);
+      setMyMultiplayerId(session.playerId);
+      setOpponentType('human');
+      setScreen('playing');
     } catch (err) {
+      playerIdRef.current = '';
       setJoinError(err instanceof Error ? err.message : 'Failed to join room');
+      setOpponentChoice('friend');
+      setScreen((s) => (s === 'landing' ? 'setup' : s));
     } finally {
       setIsJoiningRoom(false);
     }
   }
 
   function handleBackToLanding() {
-    if (activeRoom && roomCodeRef.current) {
-      void sendAction({ action: 'leave' });
-    }
     leaveRoomLocally();
     resetMatch();
     setScreen('landing');
@@ -847,7 +863,6 @@ export default function Home() {
         myPlayerId={myMultiplayerId}
         copied={copied}
         notice={roomNotice}
-        storageOk={storageOk}
         disconnectedNames={disconnectedNames}
         onCopy={handleCopyInviteLink}
         onStart={handleStartRoomMatch}
@@ -933,13 +948,9 @@ export default function Home() {
         </div>
       </header>
 
-      {(disconnectedNames.length > 0 || roomNotice || (activeRoom && !storageOk)) && (
+      {(disconnectedNames.length > 0 || roomNotice) && (
         <div className="relative z-20 max-w-5xl mx-auto w-full flex-shrink-0">
-          {activeRoom && !storageOk && (
-            <div className="bg-[#ffd60a] text-black border-2 border-black px-3 py-1 font-num text-[11px] font-black">
-              Server storage is not configured - this room may drop mid-match.
-            </div>
-          )}
+
           {disconnectedNames.length > 0 && (
             <div className="bg-[#ff3b30] text-white border-2 border-black px-3 py-1 font-num text-[11px] font-black uppercase">
               ⚠ {disconnectedNames.join(', ')} seems disconnected. Waiting for them to come back...
@@ -1081,17 +1092,14 @@ export default function Home() {
                   </div>
                   <div className="relative w-full flex-1 bg-black min-h-0 overflow-hidden">
                     <WebcamHandTracker
+                      ref={trackerRef}
                       playerLabel={myName}
-                      isThrowRequired={myThrowRequired}
-                      ballCycle={ballCycle}
                       cooldownRemaining={ballCooldownRemaining}
-                      onThrowConfirmed={handlePlayerThrow}
+                      countdownLabel={countdownLabel}
+                      lockedValue={lockedValue}
+                      hint={isInnings && !iAmActive ? 'Not your ball - cheer on your teammate' : null}
+                      onStream={handleLocalStream}
                     />
-                    {isInnings && !iAmActive && (
-                      <div className="absolute inset-x-0 bottom-0 bg-black/70 text-center text-[11px] font-num font-black uppercase text-white py-1">
-                        Not your ball - cheer on your teammate
-                      </div>
-                    )}
                   </div>
                 </div>
                 {tile(opp1, 'bg-[#ff6fb5]', 'bg-[#2563eb]', 'OPPONENT 1', oppThrowReady)}
@@ -1126,12 +1134,14 @@ export default function Home() {
               {/* Webcam Box */}
               <div className="relative w-full flex-1 bg-black min-h-0 overflow-hidden">
                 <WebcamHandTracker
-                  playerLabel={myName}
-                  isThrowRequired={myThrowRequired}
-                  ballCycle={ballCycle}
-                  cooldownRemaining={ballCooldownRemaining}
-                  onThrowConfirmed={handlePlayerThrow}
-                />
+                      ref={trackerRef}
+                      playerLabel={myName}
+                      cooldownRemaining={ballCooldownRemaining}
+                      countdownLabel={countdownLabel}
+                      lockedValue={lockedValue}
+                      hint={isInnings && !iAmActive ? 'Not your ball - cheer on your teammate' : null}
+                      onStream={handleLocalStream}
+                    />
               </div>
             </div>
 
@@ -1184,8 +1194,10 @@ export default function Home() {
                       Share this code or link with your friend to connect instantly!
                     </span>
                   </div>
+                ) : activeRoom && remoteStream ? (
+                  <RemoteVideo stream={remoteStream} label={oppName} />
                 ) : activeRoom ? (
-                  /* Connected Friend */
+                  /* Connected Friend (no video yet) */
                   <div className="flex flex-col items-center justify-center mb-1">
                     <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/20 border-3 border-white flex items-center justify-center mb-1 shadow-[2px_2px_0_#000]">
                       <Users className="w-9 h-9 sm:w-11 sm:h-11 text-white" />
@@ -1218,7 +1230,7 @@ export default function Home() {
                 {/* Throw Number Display */}
                 {(activeRoom ? activeRoom.players.length >= 2 : true) &&
                   (oppDisplayedThrow !== null || match.phase === 'match_over') && (
-                    <div className="font-display text-5xl sm:text-6xl font-black text-white leading-none mt-1 animate-bounce-in drop-shadow-[2px_2px_0_#000]">
+                    <div className="relative z-10 font-display text-5xl sm:text-6xl font-black text-white leading-none mt-1 animate-bounce-in drop-shadow-[2px_2px_0_#000]">
                       {oppDisplayedThrow !== null ? oppDisplayedThrow : 0}
                     </div>
                   )}
@@ -1263,8 +1275,8 @@ export default function Home() {
             </div>
             <KeyboardFallback
               playerLabel={myName}
-              selectedThrow={pendingThrows[myKey]}
-              disabled={isBallCooldown || !iAmActive || myThrowReady}
+              selectedThrow={lockedValue ?? pendingThrows[myKey]}
+              disabled={!iAmActive || myThrowReady}
               onThrow={(val) => {
                 handlePlayerThrow(val);
                 setShowTouchKeyboard(false);
@@ -1350,7 +1362,6 @@ function RoomLobby({
   myPlayerId,
   copied,
   notice,
-  storageOk,
   disconnectedNames,
   onCopy,
   onStart,
@@ -1360,7 +1371,6 @@ function RoomLobby({
   myPlayerId: string;
   copied: boolean;
   notice: string | null;
-  storageOk: boolean;
   disconnectedNames: string[];
   onCopy: () => void;
   onStart: () => void;
@@ -1428,6 +1438,10 @@ function RoomLobby({
             )}
           </div>
 
+          <p className="font-num text-[10px] text-[#666] text-center">
+            Peer-to-peer match: the host keeps this tab open for the whole game.
+          </p>
+
           {isHost ? (
             <button
               onClick={onStart}
@@ -1442,17 +1456,32 @@ function RoomLobby({
             </div>
           )}
 
-          {!storageOk && (
-            <div className="p-2 bg-[#ffd60a] border-2 border-black font-num text-[11px] font-bold">
-              Heads up: the server has no shared storage configured, so this room may drop. The site owner needs to
-              add Upstash Redis (see README).
-            </div>
-          )}
           {notice && (
             <div className="p-2 bg-[#ff3b30] text-white border-2 border-black font-num text-xs font-bold">{notice}</div>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* =========================================== */
+/* Opponent live video (WebRTC)                */
+/* =========================================== */
+function RemoteVideo({ stream, label }: { stream: MediaStream; label: string }) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (ref.current && ref.current.srcObject !== stream) {
+      ref.current.srcObject = stream;
+      ref.current.play().catch(() => {});
+    }
+  }, [stream]);
+  return (
+    <div className="absolute inset-0 bg-black">
+      <video ref={ref} playsInline autoPlay muted className="w-full h-full object-cover mirror" />
+      <span className="absolute left-1 bottom-1 px-1.5 py-0.5 bg-black/70 text-white font-num text-[10px] font-black uppercase">
+        {label}
+      </span>
     </div>
   );
 }
