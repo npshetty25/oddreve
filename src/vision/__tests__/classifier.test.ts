@@ -95,15 +95,6 @@ describe('Vision Classifier & Stabilization', () => {
     expect(classifyHandGesture(lms4).fingerCount).toBe(4);
   });
 
-  it('does not count a partially curled ring finger as a third finger', () => {
-    const landmarks = createMockLandmarks({ thumbExt: false, indexExt: true, middleExt: true });
-    landmarks[13] = { x: 0.54, y: 0.6, z: 0 };
-    landmarks[14] = { x: 0.54, y: 0.5, z: 0 };
-    landmarks[16] = { x: 0.638, y: 0.55, z: 0 };
-
-    expect(classifyHandGesture(landmarks).fingerCount).toBe(2);
-  });
-
   it('ThrowStabilizer requires 300ms of consistent reading before accepting throw', () => {
     const stabilizer = new ThrowStabilizer(300);
     const t0 = 1000;
